@@ -190,6 +190,76 @@ def test_cls_ignores_mask(emb: torch.Tensor, mask: torch.Tensor) -> None:
     assert torch.allclose(pooled_without_mask, pooled_with_mask)
 
 
+# ---- eos pooling ----
+
+def test_eos_with_right_padding_returns_last_active_token() -> None:
+    emb = torch.arange(4, dtype=torch.float32).reshape(1, 4, 1)  # (1, 4, 1)
+    mask = torch.tensor([[1, 1, 0, 0]])  # (1, 4)
+    pooled = Pooler(['eos']).eos_pooling(emb, attention_mask=mask)  # (1, 1)
+    assert pooled.item() == 1
+
+
+def test_eos_with_left_padding_returns_last_active_token() -> None:
+    emb = torch.arange(4, dtype=torch.float32).reshape(1, 4, 1)  # (1, 4, 1)
+    mask = torch.tensor([[0, 0, 1, 1]])  # (1, 4)
+    pooled = Pooler(['eos']).eos_pooling(emb, attention_mask=mask)  # (1, 1)
+    assert pooled.item() == 3
+
+
+def test_eos_with_noncontiguous_mask_returns_last_active_token() -> None:
+    emb = torch.arange(4, dtype=torch.float32).reshape(1, 4, 1)  # (1, 4, 1)
+    mask = torch.tensor([[1, 0, 1, 0]])  # (1, 4)
+    pooled = Pooler(['eos']).eos_pooling(emb, attention_mask=mask)  # (1, 1)
+    assert pooled.item() == 2
+
+
+def test_eos_uses_explicit_boundary_token() -> None:
+    # The boundary token sits mid-sequence, so a last-active-position rule would miss it.
+    emb = torch.arange(5, dtype=torch.float32).reshape(1, 5, 1)  # (1, 5, 1)
+    mask = torch.ones((1, 5), dtype=torch.long)  # (1, 5)
+    input_ids = torch.tensor([[10, 11, 99, 12, 13]])  # (1, 5)
+    pooled = Pooler(['eos']).eos_pooling(
+        emb,
+        attention_mask=mask,
+        input_ids=input_ids,
+        eos_token_id=99,
+    )  # (1, 1)
+    assert pooled.item() == 2
+
+
+@pytest.mark.parametrize(
+    'input_ids, expected_count',
+    [
+        (torch.tensor([[10, 11, 12]]), 0),
+        (torch.tensor([[99, 11, 99]]), 2),
+    ],
+)
+def test_eos_rejects_missing_or_ambiguous_boundary(
+    input_ids: torch.Tensor,
+    expected_count: int,
+) -> None:
+    # input_ids: (1, 3)
+    emb = torch.arange(3, dtype=torch.float32).reshape(1, 3, 1)  # (1, 3, 1)
+    with pytest.raises(ValueError, match=rf"counts \[{expected_count}\]"):
+        Pooler(['eos']).eos_pooling(
+            emb,
+            attention_mask=torch.ones((1, 3), dtype=torch.long),
+            input_ids=input_ids,
+            eos_token_id=99,
+        )
+
+
+def test_eos_rejects_all_zero_and_nonbinary_masks() -> None:
+    emb = torch.zeros((1, 3, 2))  # (1, 3, 2)
+    pooler = Pooler(['eos'])
+    with pytest.raises(ValueError, match='all-zero'):
+        pooler.eos_pooling(emb, attention_mask=torch.zeros((1, 3)))
+    with pytest.raises(ValueError, match='only 0/1'):
+        pooler.eos_pooling(emb, attention_mask=torch.tensor([[1.0, 0.5, 0.0]]))
+
+
+# ---- parti pooling ----
+
 def test_parti_shape(
     emb: torch.Tensor,
     attentions: torch.Tensor,
@@ -199,6 +269,38 @@ def test_parti_shape(
     pooler = Pooler(['parti'])
     pooled = pooler._pool_parti(emb, attentions, attention_mask=mask)  # (b, d)
     assert pooled.shape == (batch_size, hidden_size)
+
+
+def test_parti_runs_through_call(
+    emb: torch.Tensor,
+    attentions: torch.Tensor,
+    mask: torch.Tensor,
+) -> None:
+    # emb: (b, l, d); attentions: (b, a, l, l); mask: (b, l)
+    # __call__ hands every pooling function the full keyword set, including the ones only
+    # eos reads, so a pooling function without **kwargs would raise TypeError here while
+    # a direct _pool_parti call still passed.
+    pooler = Pooler(['parti'])
+    pooled = pooler(emb, attention_mask=mask, attentions=attentions)  # (b, d)
+    assert pooled.shape == (batch_size, hidden_size)
+
+
+def test_call_forwards_eos_arguments_to_every_pooling_type(
+    emb: torch.Tensor,
+    mask: torch.Tensor,
+) -> None:
+    # emb: (b, l, d); mask: (b, l)
+    # eos needs input_ids and eos_token_id; every other pooling type must tolerate them.
+    input_ids = torch.zeros_like(mask)  # (b, l)
+    input_ids[:, 0] = 7
+    types = ['mean', 'max', 'std', 'var', 'norm', 'median', 'cls', 'eos']
+    pooled = Pooler(types)(
+        emb,
+        attention_mask=torch.ones_like(mask),
+        input_ids=input_ids,
+        eos_token_id=7,
+    )  # (b, p * d)
+    assert pooled.shape == (batch_size, len(types) * hidden_size)
 
 
 def test_call_single_type(emb: torch.Tensor) -> None:

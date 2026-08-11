@@ -174,6 +174,24 @@ model_descriptions = {
         'size': '650M parameters',
         'type': 'Protein language model',
         'citation': 'N/A'
+    },
+    'CARBON-500M': {
+        'description': 'Decoder-only autoregressive DNA language model (6-mer tokenization) for sequence-level genomic tasks.',
+        'size': '500M parameters',
+        'type': 'DNA language model',
+        'citation': 'HuggingFaceBio/Carbon-500M'
+    },
+    'CARBON-3B': {
+        'description': 'Decoder-only autoregressive DNA language model (6-mer tokenization) for sequence-level genomic tasks.',
+        'size': '3B parameters',
+        'type': 'DNA language model',
+        'citation': 'HuggingFaceBio/Carbon-3B'
+    },
+    'CARBON-8B': {
+        'description': 'Decoder-only autoregressive DNA language model (6-mer tokenization) for sequence-level genomic tasks.',
+        'size': '8B parameters',
+        'type': 'DNA language model',
+        'citation': 'HuggingFaceBio/Carbon-8B'
     }
 }
 

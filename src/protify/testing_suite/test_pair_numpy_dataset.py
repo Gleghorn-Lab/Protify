@@ -6,7 +6,6 @@ depend on the random state, which these tests pin down.
 """
 
 import random
-import types
 
 import numpy as np
 import pytest
@@ -31,24 +30,27 @@ SEQ_B = 'CCCC'
 @pytest.fixture
 def mixin(tmp_path):
     """A DataMixin whose only embedding source is a two-protein .pth cache."""
-    from protify.embedder import get_embedding_filename
+    from protify.embedder import EmbeddingArguments
 
     # One distinguishing value per protein, so a swap is visible in the concatenated row.
     embeddings = {
         SEQ_A: torch.tensor([1.0, 2.0]),  # (d,), d = 2
         SEQ_B: torch.tensor([30.0, 40.0]),  # (d,)
     }
-    filename = get_embedding_filename('test-model', False, POOLING_TYPES, 'pth', HIDDEN_STATE_INDEX)
-    torch.save(embeddings, tmp_path / filename)
+    # The real config object names the file, so the fixture cannot drift from the cache
+    # identity the reader builds.
+    embedding_args = EmbeddingArguments(
+        embedding_save_dir=str(tmp_path),
+        embedding_pooling_types=POOLING_TYPES,
+        embedding_hidden_state_index=HIDDEN_STATE_INDEX,
+        matrix_embed=False,
+    )
+    torch.save(embeddings, tmp_path / embedding_args.cache_filename('test-model'))
 
     mixin = DataMixin()
     mixin._sql = False
     mixin._full = False
-    mixin.embedding_args = types.SimpleNamespace(
-        embedding_save_dir=str(tmp_path),
-        pooling_types=POOLING_TYPES,
-        hidden_state_index=HIDDEN_STATE_INDEX,
-    )
+    mixin.embedding_args = embedding_args
     return mixin
 
 

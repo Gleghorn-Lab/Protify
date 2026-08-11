@@ -62,7 +62,7 @@ The schema is defined by the union of [base.yaml](../src/protify/yamls/base.yaml
 |----------|------|---------|-------------|
 | `--delimiter` | str | , | Delimiter for CSV/TSV from data_dirs. |
 | `--col_names` | list | [seqs, labels] | Column names (legacy; often inferred). |
-| `--max_length` | int | 2048 | Maximum sequence length. |
+| `--max_length` | int | 2048 | Maximum tokenizer length, including special and model boundary tokens. For CARBON, the raw DNA budget is `6 * (max_length - 2)` base pairs. |
 | `--padding` | choice | max_length | Padding strategy: `max_length` pads all sequences to `--max_length` (recommended for torch.compile + flex attention); `longest` pads to the longest sequence in each batch. |
 | `--trim` | flag | False | If set, drop sequences longer than max_length; else truncate. |
 | `--data_names` | list | [] | Dataset names (HuggingFace or preset e.g. standard_benchmark). |
@@ -76,8 +76,8 @@ The schema is defined by the union of [base.yaml](../src/protify/yamls/base.yaml
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
 | `--model_names` | list | None | Preset model names (e.g. ESM2-8). Mutually exclusive with model_paths/model_types. |
-| `--model_paths` | list | None | Model paths (HF or local). Must pair with --model_types. |
-| `--model_types` | list | None | Type keywords for each path (esm2, custom, etc.). |
+| `--model_paths` | list | None | Model paths (HF or local). Must pair with --model_types. Remote CARBON paths must be pinned as `org/repo@<full-commit-sha>`. |
+| `--model_types` | list | None | Type keywords for each path (esm2, carbon, custom, etc.). |
 | `--model_dtype` | choice | bf16 | fp32, fp16, bf16, float32, float16, bfloat16. |
 | `--use_xformers` | flag | False | Use xformers attention for AMPLIFY. |
 | `--sae_layer` | int | None | ESMC hidden-state layer the sparse autoencoder reads. Defaults to the depth layer each backbone publishes (23, 27, 60). |
@@ -138,7 +138,7 @@ The schema is defined by the union of [base.yaml](../src/protify/yamls/base.yaml
 | `--download_embeddings` | flag | False | Download precomputed embeddings. |
 | `--matrix_embed` | flag | False | Keep per-residue matrices (no pooling). |
 | `--embedding_pooling_types` | list | [mean, var] | Pooling for vector embeddings. |
-| `--embedding_hidden_state_index` | int | -1 | Hidden-state tuple index to pool from. `-1` uses the final hidden state and old cache names. |
+| `--embedding_hidden_state_index` | int | -1 | Hidden-state tuple index to pool from. `-1` uses `last_hidden_state` without materializing all layer states. |
 | `--save_embeddings` | flag | False | Save computed embeddings. |
 | `--embed_dtype` | choice | None | fp32/fp16/bf16 for embeddings (default: model_dtype). |
 | `--sql` | flag | False | Store embeddings in SQLite. |
@@ -272,7 +272,7 @@ Anything you can set via CLI can be set in YAML; CLI overrides when both are pre
 ## model_names vs model_paths and model_types
 
 - **model_names:** A list of preset names (e.g. `ESM2-8`, `ProtT5`, or `standard` to expand to a standard set). Resolved via [supported models](models_and_embeddings.md) and `get_base_model`/`get_tokenizer`. Use this for built-in HuggingFace models.
-- **model_paths + model_types:** For custom or local models. `model_paths` is a list of paths (HuggingFace IDs or local dirs); `model_types` must be the same length and each element is a dispatch keyword (e.g. `esm2`, `custom`). You cannot mix: either set `model_names` or set both `model_paths` and `model_types`.
+- **model_paths + model_types:** For custom or local models. `model_paths` is a list of paths (HuggingFace IDs or local dirs); `model_types` must be the same length and each element is a dispatch keyword (e.g. `esm2`, `carbon`, `custom`). Remote CARBON paths must use `org/repo@<full-commit-sha>` so model weights are immutable. The audited tokenizer implementation and Qwen vocabulary revision are pinned in Protify. You cannot mix: either set `model_names` or set both `model_paths` and `model_types`.
 
 ---
 

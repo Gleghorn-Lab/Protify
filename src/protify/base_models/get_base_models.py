@@ -55,6 +55,33 @@ class BaseModelArguments:
                 yield name, name, None
 
 
+def get_raw_sequence_length_limit(model_name: str, max_length: int) -> int:
+    """Map a tokenizer token budget to the raw-sequence budget the dataset must respect.
+
+    Every model except CARBON consumes one residue per token, so its raw budget is the
+    token budget. CARBON reads DNA as 6-mers between two boundary tokens.
+    """
+    if 'carbon' in model_name.lower():
+        from .carbon import carbon_dna_length_for_tokens
+        return carbon_dna_length_for_tokens(max_length)
+    return max_length
+
+
+def resolve_data_max_length(model_names: List[str], max_length: int, trim: bool) -> int:
+    """Raw-sequence limit the dataset must satisfy for every model in this run.
+
+    Under truncation, keep the largest raw input any selected tokenizer can consume and
+    let each tokenizer enforce its own token budget. Under --trim, rows are dropped rather
+    than shortened, so only rows that fit every selected model may survive. An empty model
+    list falls back to the token budget, since there is no tokenizer to widen it.
+    """
+    raw_sequence_limits = [get_raw_sequence_length_limit(name, max_length) for name in model_names]
+    if not raw_sequence_limits:
+        return max_length
+
+    return min(raw_sequence_limits) if trim else max(raw_sequence_limits)
+
+
 def get_base_model(model_name: str, masked_lm: bool = False, dtype=None, model_path: str = None, pooling_types=None):
     if 'random' in model_name.lower():
         from .random import build_random_model
@@ -104,6 +131,9 @@ def get_base_model(model_name: str, masked_lm: bool = False, dtype=None, model_p
     elif 'calm' in model_name.lower():
         from .calm import build_calm_model
         return build_calm_model(model_name, masked_lm=masked_lm, dtype=dtype, model_path=model_path)
+    elif 'carbon' in model_name.lower():
+        from .carbon import build_carbon_model
+        return build_carbon_model(model_name, masked_lm=masked_lm, dtype=dtype, model_path=model_path)
     elif 'custom' in model_name.lower():
         from .custom_model import build_custom_model
         assert model_path is not None, "model_path is required for custom models. Use --model_paths and --model_types custom."
@@ -155,6 +185,9 @@ def get_base_model_for_training(model_name: str, tokenwise: bool = False, num_la
     elif 'calm' in model_name.lower():
         from .calm import get_calm_for_training
         return get_calm_for_training(model_name, tokenwise, num_labels, hybrid, dtype=dtype, model_path=model_path)
+    elif 'carbon' in model_name.lower():
+        from .carbon import get_carbon_for_training
+        return get_carbon_for_training(model_name, tokenwise, num_labels, hybrid, dtype=dtype, model_path=model_path)
     else:
         raise ValueError(f"Model {model_name} not supported")
 
@@ -203,6 +236,9 @@ def get_tokenizer(model_name: str, model_path: str = None):
     elif 'calm' in model_name.lower():
         from .calm import get_calm_tokenizer
         return get_calm_tokenizer(model_name, model_path=model_path)
+    elif 'carbon' in model_name.lower():
+        from .carbon import get_carbon_tokenizer
+        return get_carbon_tokenizer(model_name, model_path=model_path)
     else:
         raise ValueError(f"Model {model_name} not supported")
 

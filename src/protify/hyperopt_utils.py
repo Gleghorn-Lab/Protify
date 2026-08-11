@@ -5,7 +5,7 @@ import json
 import csv
 from typing import Dict, Any, List, Tuple
 from utils import torch_load, print_message
-from embedder import Embedder, get_embedding_filename
+from embedder import Embedder
 from base_models.get_base_models import get_tokenizer
 
 
@@ -129,15 +129,8 @@ class HyperoptModule:
     def reload_embeddings(self, ppi: bool) -> None:
         tokenizer = get_tokenizer(self.model_name)
         test_seq = self.mp.all_seqs[0]
-        hidden_state_index = self.mp.embedding_args.hidden_state_index
         if self.mp._sql:
-            filename = get_embedding_filename(
-                self.model_name,
-                self.mp._full,
-                self.mp.embedding_args.pooling_types,
-                'db',
-                hidden_state_index,
-            )
+            filename = self.mp._embedding_cache_filename(self.model_name, 'db')
             save_path = os.path.join(self.mp.embedding_args.embedding_save_dir, filename)
             if not os.path.exists(save_path):
                 embedder = Embedder(self.mp.embedding_args, self.mp.all_seqs)
@@ -145,13 +138,7 @@ class HyperoptModule:
             input_dim = self.mp.get_embedding_dim_sql(save_path, test_seq, tokenizer)
             self.emb_dict = None
         else:
-            filename = get_embedding_filename(
-                self.model_name,
-                self.mp._full,
-                self.mp.embedding_args.pooling_types,
-                'pth',
-                hidden_state_index,
-            )
+            filename = self.mp._embedding_cache_filename(self.model_name, 'pth')
             save_path = os.path.join(self.mp.embedding_args.embedding_save_dir, filename)
             if not os.path.exists(save_path):
                 previous_save_embeddings = self.mp.embedding_args.save_embeddings
@@ -338,23 +325,11 @@ class HyperoptModule:
                     emb_dict = None
                     if not mp.full_args.full_finetuning:
                         if mp._sql:
-                            filename = get_embedding_filename(
-                                model_name,
-                                mp._full,
-                                mp.embedding_args.pooling_types,
-                                'db',
-                                mp.embedding_args.hidden_state_index,
-                            )
+                            filename = mp._embedding_cache_filename(model_name, 'db')
                             save_path = os.path.join(mp.embedding_args.embedding_save_dir, filename)
                             input_dim = mp.get_embedding_dim_sql(save_path, test_seq, tokenizer)
                         else:
-                            filename = get_embedding_filename(
-                                model_name,
-                                mp._full,
-                                mp.embedding_args.pooling_types,
-                                'pth',
-                                mp.embedding_args.hidden_state_index,
-                            )
+                            filename = mp._embedding_cache_filename(model_name, 'pth')
                             save_path = os.path.join(mp.embedding_args.embedding_save_dir, filename)
                             emb_dict = torch_load(save_path)
                             input_dim = mp.get_embedding_dim_pth(emb_dict, test_seq, tokenizer)
@@ -378,23 +353,11 @@ class HyperoptModule:
                 emb_dict = None
                 if not mp.full_args.full_finetuning:
                     if mp._sql:
-                        filename = get_embedding_filename(
-                            model_name,
-                            mp._full,
-                            mp.embedding_args.pooling_types,
-                            'db',
-                            mp.embedding_args.hidden_state_index,
-                        )
+                        filename = mp._embedding_cache_filename(model_name, 'db')
                         save_path = os.path.join(mp.embedding_args.embedding_save_dir, filename)
                         input_dim = mp.get_embedding_dim_sql(save_path, test_seq, tokenizer)
                     else:
-                        filename = get_embedding_filename(
-                            model_name,
-                            mp._full,
-                            mp.embedding_args.pooling_types,
-                            'pth',
-                            mp.embedding_args.hidden_state_index,
-                        )
+                        filename = mp._embedding_cache_filename(model_name, 'pth')
                         save_path = os.path.join(mp.embedding_args.embedding_save_dir, filename)
                         emb_dict = torch_load(save_path)
                         input_dim = mp.get_embedding_dim_pth(emb_dict, test_seq, tokenizer)

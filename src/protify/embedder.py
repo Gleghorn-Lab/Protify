@@ -1,4 +1,7 @@
-import entrypoint_setup
+try:
+    from . import entrypoint_setup
+except ImportError:
+    import entrypoint_setup
 
 import os
 import math
@@ -10,6 +13,7 @@ import torch.multiprocessing as mp
 import warnings
 import sqlite3
 import gzip
+import hashlib
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from dataclasses import dataclass
@@ -33,6 +37,11 @@ except ImportError:
     )
 
 
+# Truncation limit every embedding in the download repository was produced under, and the
+# default everywhere a max_length is not supplied.
+PUBLISHED_EMBEDDING_MAX_LENGTH = 2048
+
+
 def build_collator(tokenizer: object, padding: str = 'max_length', max_length: int = 2048) -> Callable[[List[str]], Dict[str, torch.Tensor]]:
     def _collate_fn(sequences: List[str]) -> Dict[str, torch.Tensor]:
         """Collate function for batching sequences."""
@@ -51,28 +60,81 @@ def get_embedding_filename(
         pooling_types: List[str],
         extension: str = 'pth',
         hidden_state_index: int = -1,
+        max_length: int = 2048,
+        model_type: Optional[str] = None,
+        model_path: Optional[str] = None,
 ) -> str:
-    """
-    Generate embedding filename with pooling types for vector embeddings.
-    
+    """Name the embedding cache after every input that can change the stored values.
+
     Args:
-        model_name: Name of the model
-        matrix_embed: Whether embeddings are matrices (True) or vectors (False)
-        pooling_types: List of pooling types used (only relevant for vector embeddings)
-        extension: File extension ('pth' or 'db')
-        hidden_state_index: Hidden-state tuple index used for embeddings. -1 uses the final hidden state.
-    
-    Returns:
-        Filename string in format: {model_name}_{matrix_embed}[_hs{hidden_state_index}][_{pooling_types}].{extension}
+        model_name: Resolved display name of the model, which already carries SAE settings.
+        matrix_embed: True for per-residue matrices, False for pooled vectors.
+        pooling_types: Pooling operations, used only for vector embeddings.
+        extension: 'pth' or 'db'.
+        hidden_state_index: Hidden-state tuple index. -1 uses the final hidden state.
+        max_length: Tokenizer truncation limit, which decides how much of a long
+            sequence reached the model.
+        model_type: Dispatch keyword when it differs from model_name, as in path mode.
+        model_path: Explicit path in path mode, needed to resolve a CARBON revision.
     """
     assert isinstance(hidden_state_index, int), "hidden_state_index must be an integer."
+    if not isinstance(max_length, int) or isinstance(max_length, bool) or max_length < 1:
+        raise ValueError("max_length must be a positive integer")
     base_name = f'{model_name}_{matrix_embed}'
     if hidden_state_index != -1:
         base_name = f'{base_name}_hs{hidden_state_index}'
+    base_name = f'{base_name}_len{max_length}'
+
+    dispatch_name = model_type or model_name
+    if 'carbon' in dispatch_name.lower():
+        try:
+            from .base_models.carbon import (
+                CARBON_PREPROCESSING_SCHEMA,
+                resolve_carbon_source,
+            )
+        except ImportError:
+            from base_models.carbon import (
+                CARBON_PREPROCESSING_SCHEMA,
+                resolve_carbon_source,
+            )
+
+        source, revision = resolve_carbon_source(dispatch_name, model_path=model_path)
+        if revision is None:
+            # Local models have no Hub SHA. Keep caches distinct by resolved
+            # source path and mark the identity as local rather than pretending
+            # it is an immutable model revision.
+            resolved_source = os.path.normcase(os.path.realpath(source))
+            source_digest = hashlib.sha256(resolved_source.encode('utf-8')).hexdigest()
+            revision = f'local_{source_digest}'
+        base_name = (
+            f'{base_name}_rev{revision}'
+            f'_prep{CARBON_PREPROCESSING_SCHEMA}'
+        )
     if not matrix_embed and pooling_types:
         # For vector embeddings, include pooling types in filename
         pooling_str = '_'.join(sorted(pooling_types))  # Sort for consistency
         base_name = f'{base_name}_{pooling_str}'
+    return f'{base_name}.{extension}'
+
+
+def legacy_embedding_filename(
+        model_name: str,
+        matrix_embed: bool,
+        pooling_types: List[str],
+        extension: str = 'pth',
+        hidden_state_index: int = -1,
+) -> str:
+    """Name a cache the way Protify did before max_length joined the cache identity.
+
+    The published embeddings in the download repository were uploaded under this scheme,
+    all of them produced at PUBLISHED_EMBEDDING_MAX_LENGTH. Only `_download_embeddings`
+    should call this, so a stale remote name never becomes the name we write locally.
+    """
+    base_name = f'{model_name}_{matrix_embed}'
+    if hidden_state_index != -1:
+        base_name = f'{base_name}_hs{hidden_state_index}'
+    if not matrix_embed and pooling_types:
+        base_name = f'{base_name}_{"_".join(sorted(pooling_types))}'
     return f'{base_name}.{extension}'
 
 
@@ -187,6 +249,25 @@ class EmbeddingArguments:
         assert isinstance(embedding_scaler, bool), f"Invalid embedding_scaler: {embedding_scaler}"
         self.embedding_scaler = embedding_scaler
 
+    def cache_filename(
+            self,
+            model_name: str,
+            matrix_embed: Optional[bool] = None,
+            extension: str = 'pth',
+            model_type: Optional[str] = None,
+            model_path: Optional[str] = None,
+        ) -> str:
+        return get_embedding_filename(
+            model_name,
+            self.matrix_embed if matrix_embed is None else matrix_embed,
+            self.pooling_types,
+            extension=extension,
+            hidden_state_index=self.hidden_state_index,
+            max_length=self.max_length,
+            model_type=model_type,
+            model_path=model_path,
+        )
+
 
 class Embedder:
     def __init__(self, args: EmbeddingArguments, all_seqs: List[str]):
@@ -213,24 +294,49 @@ class Embedder:
         n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
         print_message(f'Device {self.device} found ({n_gpus} GPU{"s" if n_gpus != 1 else ""})')
 
-    def _download_embeddings(self, model_name: str):
+    def _download_embeddings(
+            self,
+            model_name: str,
+            model_type: Optional[str] = None,
+            model_path: Optional[str] = None,
+        ):
         # download from download_dir
         # unzip
         # move to embedding_save_dir
-        filename = get_embedding_filename(
+        filename = self.args.cache_filename(
+            model_name,
+            extension='pth',
+            model_type=model_type,
+            model_path=model_path,
+        )
+        remote_names = [filename]
+        # The published files predate max_length entering the cache identity. They are
+        # still valid at the default limit, so ask for the old name too, and only then.
+        # Below that limit the download would carry more of each sequence than this run
+        # asked for, which is exactly what putting max_length in the name prevents.
+        legacy_name = legacy_embedding_filename(
             model_name,
             self.matrix_embed,
             self.pooling_types,
             'pth',
             self.hidden_state_index,
         )
-        try:
-            local_path = hf_hub_download(
-                repo_id=self.download_dir,
-                filename=f'embeddings/{filename}.gz',
-                repo_type='dataset'
-            )
-        except Exception:
+        if self.max_length == PUBLISHED_EMBEDDING_MAX_LENGTH and legacy_name != filename:
+            remote_names.append(legacy_name)
+
+        local_path = None
+        for remote_name in remote_names:
+            try:
+                local_path = hf_hub_download(
+                    repo_id=self.download_dir,
+                    filename=f'embeddings/{remote_name}.gz',
+                    repo_type='dataset'
+                )
+                break
+            except Exception:
+                continue
+
+        if local_path is None:
             print(f'No embeddings found for {model_name} in {self.download_dir}')
             return
 
@@ -278,14 +384,18 @@ class Embedder:
             c.execute("SELECT sequence FROM embeddings")
             return {row[0] for row in c.fetchall()}
 
-    def _read_embeddings_from_disk(self, model_name: str):
+    def _read_embeddings_from_disk(
+            self,
+            model_name: str,
+            model_type: Optional[str] = None,
+            model_path: Optional[str] = None,
+        ):
         if self.sql:
-            filename = get_embedding_filename(
+            filename = self.args.cache_filename(
                 model_name,
-                self.matrix_embed,
-                self.pooling_types,
-                'db',
-                self.hidden_state_index,
+                extension='db',
+                model_type=model_type,
+                model_path=model_path,
             )
             save_path = os.path.join(self.embedding_save_dir, filename)
             if os.path.exists(save_path):
@@ -303,12 +413,11 @@ class Embedder:
 
         else:
             embeddings_dict = {}
-            filename = get_embedding_filename(
+            filename = self.args.cache_filename(
                 model_name,
-                self.matrix_embed,
-                self.pooling_types,
-                'pth',
-                self.hidden_state_index,
+                extension='pth',
+                model_type=model_type,
+                model_path=model_path,
             )
             save_path = os.path.join(self.embedding_save_dir, filename)
             if os.path.exists(save_path):
@@ -347,16 +456,24 @@ class Embedder:
         else:
             print_message(f'Pooling types: {self.pooling_types}')
             pooler = Pooler(self.pooling_types)
+        pooling_token_id = getattr(tokenizer, 'pooling_token_id', None)
 
         def _get_embeddings(
                 residue_embeddings: torch.Tensor,
                 attention_mask: Optional[torch.Tensor] = None,
-                attentions: Optional[torch.Tensor] = None
+                attentions: Optional[torch.Tensor] = None,
+                input_ids: Optional[torch.Tensor] = None,
             ) -> torch.Tensor:
             if residue_embeddings.ndim == 2 or self.matrix_embed:
                 return residue_embeddings
             else:
-                return pooler(emb=residue_embeddings, attention_mask=attention_mask, attentions=attentions)
+                return pooler(
+                    emb=residue_embeddings,
+                    attention_mask=attention_mask,
+                    attentions=attentions,
+                    input_ids=input_ids,
+                    eos_token_id=pooling_token_id,
+                )
 
         to_embed = sorted(to_embed, key=len, reverse=True)
         dataset = SimpleProteinDataset(to_embed)
@@ -410,10 +527,19 @@ class Embedder:
                         output_attentions=True,
                         **hidden_kwargs,
                     )
-                    embeddings = _get_embeddings(residue_embeddings, attention_mask=attention_mask, attentions=attentions).cpu()
+                    embeddings = _get_embeddings(
+                        residue_embeddings,
+                        attention_mask=attention_mask,
+                        attentions=attentions,
+                        input_ids=batch.get('input_ids'),
+                    ).cpu()
                 else:
                     residue_embeddings = model(**batch, **hidden_kwargs)
-                    embeddings = _get_embeddings(residue_embeddings, attention_mask=attention_mask).cpu()
+                    embeddings = _get_embeddings(
+                        residue_embeddings,
+                        attention_mask=attention_mask,
+                        input_ids=batch.get('input_ids'),
+                    ).cpu()
 
             if self.sql:
                 embeddings = embeddings.to(self.embed_dtype)
@@ -488,11 +614,23 @@ class Embedder:
                 pooler = None
             else:
                 pooler = Pooler(self.pooling_types)
+            pooling_token_id = getattr(tokenizer, 'pooling_token_id', None)
 
-            def _get_embeddings(residue_embeddings, attention_mask=None, attentions=None):
+            def _get_embeddings(
+                    residue_embeddings,
+                    attention_mask=None,
+                    attentions=None,
+                    input_ids=None,
+                ):
                 if residue_embeddings.ndim == 2 or self.matrix_embed:
                     return residue_embeddings
-                return pooler(emb=residue_embeddings, attention_mask=attention_mask, attentions=attentions)
+                return pooler(
+                    emb=residue_embeddings,
+                    attention_mask=attention_mask,
+                    attentions=attentions,
+                    input_ids=input_ids,
+                    eos_token_id=pooling_token_id,
+                )
 
             dataset = SimpleProteinDataset(shard)
             dataloader = DataLoader(
@@ -542,7 +680,11 @@ class Embedder:
 
                     with torch.autocast(device.type, dtype=self.embed_dtype, enabled=self.autocast):
                         residue_embeddings = model_obj(**batch_data, **hidden_kwargs)
-                        embeddings = _get_embeddings(residue_embeddings, attention_mask=attention_mask).cpu()
+                        embeddings = _get_embeddings(
+                            residue_embeddings,
+                            attention_mask=attention_mask,
+                            input_ids=batch_data.get('input_ids'),
+                        ).cpu()
 
                     if self.sql:
                         embeddings = embeddings.to(self.embed_dtype)
@@ -586,11 +728,15 @@ class Embedder:
 
     def __call__(self, model_name: str, model_type: str = None, model_path: str = None):
         if self.download_embeddings:
-            self._download_embeddings(model_name)
+            self._download_embeddings(model_name, model_type=model_type, model_path=model_path)
 
         if self.device.type == 'cpu':
             warnings.warn("Downloading embeddings is recommended for CPU usage - Embedding on CPU will be extremely slow!")
-        to_embed, save_path, embeddings_dict = self._read_embeddings_from_disk(model_name)
+        to_embed, save_path, embeddings_dict = self._read_embeddings_from_disk(
+            model_name,
+            model_type=model_type,
+            model_path=model_path,
+        )
 
         if len(to_embed) > 0:
             print_message(f"Embedding {len(to_embed)} sequences with {model_name}")
@@ -686,6 +832,7 @@ if __name__ == '__main__':
             embedder_args.pooling_types,
             'pth',
             embedder_args.hidden_state_index,
+            max_length=embedder_args.max_length,
         )
         save_path = os.path.join(args.embedding_save_dir, filename)
         

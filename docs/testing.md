@@ -16,7 +16,8 @@ Tests are under [src/protify/testing_suite/](../src/protify/testing_suite/). The
 |------|-------------|
 | **conftest.py** | Shared fixtures (tiny embeddings, masks, label arrays) and marker registration (`gpu`, `slow`). |
 | **test_metrics.py** | Metric computation: softmax, scorers, threshold optimization, single/multi-label classification, regression, tokenwise, ROC/PR AUC, `get_compute_metrics` dispatch. |
-| **test_pooler.py** | All pooling strategies (mean, max, norm, median, std, var, cls, parti/PageRank) with and without attention masks, concatenation behavior. |
+| **test_pooler.py** | All pooling strategies (mean, max, norm, median, std, var, cls, eos, parti/PageRank), mask layouts, explicit boundary validation, and concatenation behavior. |
+| **test_carbon.py** | CARBON and transitive Qwen source pinning, audited tokenizer parity, partial 6-mers, exact and 8-aligned padding, cache identity, checkpoint-vocabulary agreement, raw-sequence budgets across mixed model selections, LoRA target scoping, translation-aware length enforcement, lowercase DNA, GUI exposure, hidden-state selection, and embedding/training dispatch. |
 | **test_probe_construction.py** | `get_probe` factory dispatch for all probe_type x tokenwise combinations, forward passes (singlelabel, regression, multilabel, sigmoid_regression), loss computation, config roundtrip. |
 | **test_model_components.py** | `intermediate_correction_fn`, SwiGLU, `swiglu_ln_ffn`, RotaryEmbedding, MultiHeadAttention shapes and values. |
 | **test_losses.py** | `get_loss_fct` dispatch, SoftBCELoss, SoftBCEWithLogitsLoss (forward, ignore_index, smooth_factor). |
