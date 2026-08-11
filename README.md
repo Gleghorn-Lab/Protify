@@ -220,8 +220,10 @@ For more details about supported models and datasets, including programmatic acc
 
 - **Multiple interfaces**: Run experiments via an intuitive GUI, CLI, or prepared YAML files
 - **Efficient embeddings**: Leverage fast and efficient embeddings from 46+ PLMs (ESM2, ESMC, E1, ProtBert, ProtT5, ANKH, GLM2, DPLM, DPLM2, DSM, AMPLIFY, CaLM, and more) via [FastPLMs](https://github.com/Synthyra/FastPLMs)
-- **Flexible model training**: Probe-only (frozen PLM), full fine-tuning, hybrid probing, LoRA via PEFT, and vectorized multi-seed linear probes
-- **Parallel probe sweeps**: Train many seeded pooled linear probes in one vectorized pass with `--parallel_probe_runs`, including run-specific deterministic shuffles and static preflight planning for workstation launches
+- **Sparse autoencoder features**: Read ESMC through the Biohub sparse autoencoders with `ESMC-300-SAE`, `ESMC-600-SAE`, or `ESMC-6B-SAE`, choosing any published layer, sparsity, and codebook width. FastPLMs runs the SAE and returns sparse per-residue features; Protify reduces them to one vector per protein and stores wide codebooks sparsely, so a 131072-wide codebook costs roughly a ninth of dense storage. See [models and embeddings](docs/models_and_embeddings.md)
+- **Estimator probes**: `--probe_type xgboost`, `lightgbm`, or `random_forest` fit gradient-boosted or forest models on pooled embeddings through the same pipeline, cache, and results table as the neural probes. Axis-aligned splits read sparse autoencoder features directly
+- **Flexible model training**: Probe-only (frozen PLM), full fine-tuning, hybrid probing, LoRA via PEFT, and vectorized multi-seed MLP probes
+- **Parallel probe sweeps**: Train many seeded pooled MLP probes in one vectorized pass with `--parallel_probe_runs`, including run-specific deterministic shuffles and static preflight planning for workstation launches
 - **Automated model selection**: Find optimal scikit-learn models for your data with LazyPredict, enhanced by automatic hyperparameter optimization
 - **Hyperparameter optimization**: Integrated Weights & Biases sweeps that conducts a hyperparameter search and trains the final version based on the best hyperparameters
 - **Complete reproducibility**: Every session generates a detailed log that can be used to reproduce your entire workflow
@@ -339,9 +341,9 @@ pip install -v -U git+https://github.com/facebookresearch/xformers.git@main#egg=
   Notes:
   - Pass your Hugging Face and W&B tokens in the GUI Info tab so remote runs can authenticate for gated model access, experiment tracking, and Hub uploads.
 
-  ### Parallel multi-seed linear probes
+  ### Parallel multi-seed MLP probes
 
-  When embeddings are already cached, pooled sequence-level linear probes can train many seeds together instead of launching one Hugging Face Trainer run per seed:
+  When embeddings are already cached, pooled sequence-level MLP probes can train many seeds together instead of launching one Hugging Face Trainer run per seed:
 
   ```bash
   python -m main --model_names ESM2-8 --data_names DeepLoc-2 --num_runs 8 --parallel_probe_runs --parallel_probe_batch_mode run_specific --parallel_probe_index_strategy permutation --parallel_probe_max_group_size 8
@@ -411,7 +413,7 @@ pip install -v -U git+https://github.com/facebookresearch/xformers.git@main#egg=
     Note: If you download embeddings, it will be faster to use the scikit model tab than the probe tab
   <img src="https://github.com/Gleghorn-Lab/Protify/blob/main/assets/example_workflow/5.PNG" width="500">
   
-  5.) Select which probe and configuration you would like. Here, we will use a simple linear probe, a type neural network. It is the **fastest** (by a large margin) but worst performing option (by a small margin usually).
+  5.) Select which probe and configuration you would like. Here, we will use a simple MLP probe, a small neural network. It is the **fastest** (by a large margin) but worst performing option (by a small margin usually).
   
   <img src="https://github.com/Gleghorn-Lab/Protify/blob/main/assets/example_workflow/6.PNG" width="500">
   
@@ -693,7 +695,7 @@ To run only CPU tests (no GPU required):
 docker run --rm -v "${PWD}":/workspace -w /workspace protify python -m pytest src/protify/testing_suite/ -v -m "not gpu and not slow"
 ```
 
-For vectorized multi-seed linear probe changes, run the focused Docker suite from `src/protify`:
+For vectorized multi-seed MLP probe changes, run the focused Docker suite from `src/protify`:
 
 ```bash
 docker run --rm --gpus all -v "${PWD}":/workspace -e PYTHONPATH=/workspace -w /workspace/src/protify protify python -m pytest testing_suite/test_parallel_probe_benchmark.py testing_suite/test_parallel_probe_batches.py testing_suite/test_parallel_probe_compare.py testing_suite/test_parallel_probe_hardware_monitor.py testing_suite/test_parallel_probe_launch_manifest_runner.py testing_suite/test_parallel_probe_plan.py testing_suite/test_parallel_linear_probe.py testing_suite/test_parallel_probe_logger.py testing_suite/test_parallel_probe_preflight.py testing_suite/test_trainer_arguments.py -v

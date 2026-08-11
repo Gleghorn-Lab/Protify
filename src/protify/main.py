@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 
@@ -25,6 +26,7 @@ except ImportError:
             _spec.loader.exec_module(_protify_mod)
 
 from protify.cloud_cli import _run_on_cloud, _should_auto_run_cloud
+from protify.probes.estimator_probe import ESTIMATOR_PROBE_TYPES, check_task_type, is_estimator_probe
 
 
 def parse_arguments():  
@@ -82,9 +84,13 @@ def parse_arguments():
     parser.add_argument("--model_types", nargs="+", default=None, help="List of model type keywords paired with --model_paths (e.g. esm2, esmc, protbert, prott5, ankh, glm, dplm, dplm2, protclm, onehot, amplify, e1, calm, custom, random).")
     parser.add_argument("--model_dtype", type=str, choices=["fp32", "fp16", "bf16", "float32", "float16", "bfloat16"], default="bf16", help="Data type for loading base models.")
     parser.add_argument("--use_xformers", action="store_true", help="Use xformers memory-efficient attention for AMPLIFY models.")
+    parser.add_argument("--sae_layer", type=int, default=None, help="ESMC hidden-state layer the sparse autoencoder reads. Defaults to the 75%% depth layer each backbone publishes (23, 27, and 60). Only layers other than that one are restricted to --sae_k 64 with --sae_codebook_dim 16384.")
+    parser.add_argument("--sae_k", type=int, choices=[16, 32, 64, 128, 256, 512], default=None, help="Active sparse autoencoder features per residue. Defaults to 64.")
+    parser.add_argument("--sae_codebook_dim", type=int, choices=[8192, 16384, 32768, 65536, 131072], default=None, help="Sparse autoencoder codebook width, which is the embedding dimension per pooling type. Defaults to 8192.")
 
     # ----------------- ProbeArguments ----------------- #
-    parser.add_argument("--probe_type", choices=["linear", "transformer", "lyra"], default="linear", help="Type of probe.")
+    parser.add_argument("--probe_type", choices=["mlp", "linear", "transformer", "lyra", "xgboost", "lightgbm", "random_forest"], default="mlp", help="Type of probe. 'mlp' is the pooled feed-forward probe ('linear' is its former name and still works). 'xgboost', 'lightgbm', and 'random_forest' fit an estimator on pooled embeddings instead of a network.")
+    parser.add_argument("--probe_n_jobs", type=int, default=-1, help="Worker processes for estimator probes (xgboost, lightgbm, random_forest). -1 uses every core.")
     parser.add_argument("--tokenwise", action="store_true", help="Use a tokenwise probe (per-token outputs) instead of a sequence-level probe.")
     parser.add_argument("--hidden_size", type=int, default=8192, help="Hidden dimension size for probe.")
     parser.add_argument("--dropout", type=float, default=0.2, help="Dropout rate.")
@@ -277,7 +283,12 @@ def parse_arguments():
     if args.model_names is None and args.model_paths is None:
         args.model_names = ["ESM2-8"]
 
-    assert args.probe_type == "linear" or args.matrix_embed, "When probe_type is not linear, --matrix_embed must be True."
+    # Only probes that consume a pooled vector can run without per-residue embeddings.
+    pooled_vector_probes = ("mlp", "linear") + ESTIMATOR_PROBE_TYPES
+    assert args.probe_type in pooled_vector_probes or args.matrix_embed, (
+        f"--probe_type {args.probe_type} reads per-residue embeddings, so --matrix_embed must be set. "
+        f"Probes that take a pooled vector are {pooled_vector_probes}."
+    )
 
     if args.hf_token is not None:
         from huggingface_hub import login
@@ -472,6 +483,11 @@ def parse_arguments():
             yaml_args.model_types = args.model_types
         if "model_names" not in yaml_args.__dict__:
             yaml_args.model_names = args.model_names
+        # A YAML file names the settings a run cares about, not every argument. Backfill
+        # the rest from the parser so adding an argument does not break existing configs.
+        for key, value in args.__dict__.items():
+            if key not in yaml_args.__dict__:
+                setattr(yaml_args, key, value)
         return yaml_args
     else:
         return args
@@ -529,6 +545,7 @@ from protify.data.data_mixin import DataArguments, DataMixin
 from protify.embedder import Embedder, EmbeddingArguments, get_embedding_filename
 from protify.hyperopt_utils import HyperoptModule
 from protify.logger import MetricsLogger, log_method_calls
+from protify.probes.estimator_probe import EstimatorProbeArguments, train_estimator_probe
 from protify.probes.get_probe import ProbeArguments, get_probe
 from protify.probes.scikit_classes import ScikitArguments, ScikitProbe
 from protify.probes.trainers import TrainerArguments, TrainerMixin
@@ -1036,14 +1053,79 @@ class MainProcess(MetricsLogger, DataMixin, TrainerMixin):
                 torch.cuda.empty_cache()
 
     @log_method_calls
-    def run_scikit_scheme(self):    
+    def run_estimator_probes(self):
+        """Fit gradient-boosted or forest probes on pooled embeddings.
+
+        Shares the embedding cache, results table, and plots with the neural probes, so
+        --probe_type xgboost differs from --probe_type mlp only in the learner.
+        """
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        for display_name, dispatch_type, model_path in self.model_args.model_entries():
+            for data_name, dataset in self.datasets.items():
+                num_labels = dataset[3]
+                X_train, y_train, X_valid, y_valid, X_test, y_test, label_type = self.prepare_scikit_dataset(
+                    display_name,
+                    dataset,
+                    standardize=False,
+                    flip_train_pairs=self.full_args.random_pair_flipping,
+                )
+                check_task_type(self.probe_args.probe_type, label_type)
+                if label_type == 'multilabel':
+                    # prepare_scikit_dataset flattens list-valued labels; estimators need
+                    # one row of targets per sample.
+                    y_train = y_train.reshape(-1, num_labels)
+                    y_valid = y_valid.reshape(-1, num_labels)
+                    y_test = y_test.reshape(-1, num_labels)
+                self.logger.info(f'Training {self.probe_args.probe_type} probe for {data_name} with {display_name}')
+
+                valid_runs, test_runs = [], []
+                for run_index in range(self.trainer_args.num_runs):
+                    estimator_args = EstimatorProbeArguments(
+                        probe_type=self.probe_args.probe_type,
+                        task_type=label_type,
+                        num_labels=num_labels,
+                        seed=self.full_args.seed + run_index,
+                        n_jobs=self.full_args.probe_n_jobs,
+                        device=device,
+                        overrides=self._estimator_overrides(),
+                    )
+                    _, valid_metrics, test_metrics = train_estimator_probe(
+                        estimator_args, X_train, y_train, X_valid, y_valid, X_test, y_test,
+                    )
+                    valid_runs.append(valid_metrics)
+                    test_runs.append(test_metrics)
+
+                # A single run reports raw metrics; several report mean and standard
+                # deviation, matching how the neural probes report multi-run results.
+                if len(valid_runs) == 1:
+                    valid_metrics, test_metrics = valid_runs[0], test_runs[0]
+                else:
+                    valid_metrics = self._aggregate_metrics(valid_runs)
+                    test_metrics = self._aggregate_metrics(test_runs)
+                self.log_metrics(data_name, display_name, valid_metrics, split_name='valid')
+                self.log_metrics(data_name, display_name, test_metrics, split_name='test')
+
+    def _estimator_overrides(self):
+        """Estimator hyperparameters supplied through --scikit_model_args JSON."""
+        raw = getattr(self.full_args, 'scikit_model_args', None)
+        if not raw:
+            return {}
+
+        overrides = json.loads(raw)
+        print_message(f'Overriding {self.probe_args.probe_type} hyperparameters: {overrides}')
+        return overrides
+
+    @log_method_calls
+    def run_scikit_scheme(self):
         self.scikit_args = self._build_scikit_args()
         scikit_probe = ScikitProbe(self.scikit_args)
         for display_name, dispatch_type, model_path in self.model_args.model_entries():
             for data_name, dataset in self.datasets.items():
                 ### find best scikit model and parameters via cross validation and lazy predict
-                X_train, y_train, X_valid, y_valid, X_test, y_test, label_type = self.prepare_scikit_dataset(display_name, dataset)
-                
+                X_train, y_train, X_valid, y_valid, X_test, y_test, label_type = self.prepare_scikit_dataset(
+                    display_name, dataset, flip_train_pairs=self.full_args.random_pair_flipping
+                )
+
                 # If a specific model is specified, skip LazyPredict and go straight to that model
                 if self.scikit_args.model_name is not None:
                     print_message(f"Skipping LazyPredict, using specified model: {self.scikit_args.model_name}")
@@ -1217,7 +1299,10 @@ def main(args: SimpleNamespace):
               if os.environ.get('_PROTIFY_EMBED_PHASE') == '1':
                   print_message("Embed phase complete, proceeding to merge and train.")
                   return
-              main.run_nn_probes()
+              if is_estimator_probe(main.full_args.probe_type):
+                  main.run_estimator_probes()
+              else:
+                  main.run_nn_probes()
         else:
             # Determine if current experiment passed datasets
             has_datasets = bool(getattr(args, 'data_names', []) or getattr(args, 'data_dirs', []))
@@ -1245,7 +1330,10 @@ def main(args: SimpleNamespace):
                     if os.environ.get('_PROTIFY_EMBED_PHASE') == '1':
                         print_message("Embed phase complete, proceeding to merge and train.")
                         return
-                    main.run_nn_probes()
+                    if is_estimator_probe(main.full_args.probe_type):
+                        main.run_estimator_probes()
+                    else:
+                        main.run_nn_probes()
             else:
                 print_message("No datasets specified; proceeding with ProteinGym.")
 

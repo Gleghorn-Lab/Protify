@@ -15,6 +15,13 @@ all_presets_with_paths = {
     'ESMC-300': 'Synthyra/ESMplusplus_small',
     'ESMC-600': 'Synthyra/ESMplusplus_large',
     'ESMC-6B': 'Synthyra/ESMplusplus_6B',
+    # ESMC sparse autoencoders (from esmc_sae.py). These aliases expand to a fully
+    # qualified name such as ESMC-300-SAE-l23-k64-c8192; the path here is the ESM++
+    # backbone the SAE reads, since the codebook weights come from a separate Biohub
+    # repository that resolve_sae_selection picks.
+    'ESMC-300-SAE': 'Synthyra/ESMplusplus_small',
+    'ESMC-600-SAE': 'Synthyra/ESMplusplus_large',
+    'ESMC-6B-SAE': 'Synthyra/ESMplusplus_6B',
     # E1 models (from e1.py)
     'E1-150': 'Synthyra/Profluent-E1-150M',
     'E1-300': 'Synthyra/Profluent-E1-300M',
@@ -79,6 +86,9 @@ currently_supported_models = [
     'ESMC-300',
     'ESMC-600',
     'ESMC-6B',
+    'ESMC-300-SAE',
+    'ESMC-600-SAE',
+    'ESMC-6B-SAE',
     'E1-150',
     'E1-300',
     'E1-600',

@@ -7,9 +7,9 @@ from transformers import PreTrainedModel, PretrainedConfig
 from transformers.modeling_outputs import SequenceClassifierOutput
 
 try:
-    from .linear_probe import LinearProbe, LinearProbeConfig
+    from .mlp_probe import MLPProbe, MLPProbeConfig
 except ImportError:
-    from probes.linear_probe import LinearProbe, LinearProbeConfig
+    from probes.mlp_probe import MLPProbe, MLPProbeConfig
 try:
     from ..model_components.mlp import intermediate_correction_fn
 except ImportError:
@@ -194,7 +194,7 @@ class ParallelLinearProbe(PreTrainedModel):
         ]
 
     def _reset_from_linear_probes(self, seeds: list[int]) -> None:
-        single_config = LinearProbeConfig(
+        single_config = MLPProbeConfig(
             input_size=self.config.input_size,
             hidden_size=self.config.hidden_size,
             dropout=self.config.dropout,
@@ -209,7 +209,7 @@ class ParallelLinearProbe(PreTrainedModel):
             for run_idx, seed in enumerate(seeds):
                 with torch.random.fork_rng(devices=[]):
                     torch.manual_seed(seed)
-                    probe = LinearProbe(single_config)
+                    probe = MLPProbe(single_config)
                 single_param_layers = [
                     layer for layer in probe.layers
                     if isinstance(layer, (nn.Linear, nn.LayerNorm))
@@ -411,9 +411,9 @@ class ParallelLinearProbe(PreTrainedModel):
             attentions=None,
         )
 
-    def to_linear_probe(self, run_idx: int) -> LinearProbe:
+    def to_mlp_probe(self, run_idx: int) -> MLPProbe:
         assert 0 <= run_idx < self.num_runs, f"run_idx must be in [0, {self.num_runs})"
-        config = LinearProbeConfig(
+        config = MLPProbeConfig(
             input_size=self.config.input_size,
             hidden_size=self.config.hidden_size,
             dropout=self.config.dropout,
@@ -423,7 +423,7 @@ class ParallelLinearProbe(PreTrainedModel):
             pre_ln=self.config.pre_ln,
             use_bias=self.config.use_bias,
         )
-        probe = LinearProbe(config)
+        probe = MLPProbe(config)
         parallel_param_layers = self._parameter_layers()
         single_param_layers = [
             layer for layer in probe.layers

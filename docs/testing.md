@@ -25,7 +25,7 @@ Tests are under [src/protify/testing_suite/](../src/protify/testing_suite/). The
 | **test_seed_utils.py** | `set_global_seed` / `get_global_seed`, reproducibility (torch, numpy, random), `seed_worker`, `dataloader_generator`. |
 | **test_lazy_predict.py** | LazyClassifier and LazyRegressor fit, models, predictions, provide_models. |
 | **test_packaged_probe_export.py** | Linear and transformer probe save/load roundtrip via PackagedProbeModel, PPI inference with/without token_type_ids. |
-| **test_parallel_linear_probe.py** | Vectorized multi-seed linear probe behavior, exported single-run parity, shared and run-specific batches, per-run metrics, ensemble metrics, gradient clipping, chunking, and budget-derived group sizing. |
+| **test_parallel_linear_probe.py** | Vectorized multi-seed MLP probe behavior, exported single-run parity, shared and run-specific batches, per-run metrics, ensemble metrics, gradient clipping, chunking, and budget-derived group sizing. |
 | **test_parallel_probe_batches.py** | `ParallelRunDataset` deterministic per-run indexing, affine index strategy, tensor-cache fast paths, and collator shapes. |
 | **test_parallel_probe_plan.py** | Static grouping and resource estimates for model/dataset/probe/seed universes. |
 | **test_parallel_probe_preflight.py** | No-training launch-manifest generation, embedding prerequisites, execution waves, GPU placement metadata, validation templates, and helper-only `--num_labels` behavior. |

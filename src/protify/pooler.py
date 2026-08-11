@@ -22,6 +22,19 @@ class Pooler:
             'cls': self.cls_pooling,
             'parti': self._pool_parti,
         }
+        # Reject bad names here rather than at the first forward pass, where the run has
+        # already paid for a model load and an embedding pass.
+        unknown = [name for name in pooling_types if name not in self.pooling_options]
+        if unknown:
+            raise ValueError(
+                f"Unknown pooling types {unknown}; expected any of {sorted(self.pooling_options)}."
+            )
+        duplicates = [name for name in set(pooling_types) if pooling_types.count(name) > 1]
+        if duplicates:
+            raise ValueError(
+                f"Pooling types {duplicates} appear more than once. Each one widens the "
+                f"embedding by the hidden size, so repeats only waste space."
+            )
 
     def _create_pooled_matrices_across_layers(self, attentions: torch.Tensor) -> torch.Tensor:
         # attentions: (b, r, l, l); r = attention matrices or layers
@@ -162,8 +175,10 @@ class Pooler:
         **kwargs: object,
     ) -> torch.Tensor:
         # emb: (b, l, d); attention_mask: (b, l)
+        # Population standard deviation in both branches. The masked path divides by the
+        # residue count, so an unbiased estimate here would not agree with it.
         if attention_mask is None:
-            return emb.std(dim=1)  # (b, d)
+            return emb.std(dim=1, unbiased=False)  # (b, d)
 
         var = self.var_pooling(emb, attention_mask, **kwargs)  # (b, d)
         return torch.sqrt(var)  # (b, d)

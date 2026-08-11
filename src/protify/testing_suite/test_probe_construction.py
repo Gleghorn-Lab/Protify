@@ -5,7 +5,7 @@ import pytest
 
 try:
     from src.protify.probes.get_probe import ProbeArguments, get_probe, rebuild_probe_from_saved_config
-    from src.protify.probes.linear_probe import LinearProbe
+    from src.protify.probes.mlp_probe import MLPProbe
     from src.protify.probes.transformer_probe import (
         TransformerForSequenceClassification, TransformerForTokenClassification,
     )
@@ -13,14 +13,14 @@ try:
 except ImportError:
     try:
         from protify.probes.get_probe import ProbeArguments, get_probe, rebuild_probe_from_saved_config
-        from protify.probes.linear_probe import LinearProbe
+        from protify.probes.mlp_probe import MLPProbe
         from protify.probes.transformer_probe import (
             TransformerForSequenceClassification, TransformerForTokenClassification,
         )
         from protify.probes.lyra_probe import LyraForSequenceClassification, LyraForTokenClassification
     except ImportError:
         from ..probes.get_probe import ProbeArguments, get_probe, rebuild_probe_from_saved_config
-        from ..probes.linear_probe import LinearProbe
+        from ..probes.mlp_probe import MLPProbe
         from ..probes.transformer_probe import (
             TransformerForSequenceClassification, TransformerForTokenClassification,
         )
@@ -52,10 +52,17 @@ def _make_args(**kwargs) -> ProbeArguments:
     return ProbeArguments(**defaults)
 
 
-def test_get_probe_linear_sequence() -> None:
-    args = _make_args(probe_type="linear", tokenwise=False)
+def test_get_probe_mlp_sequence() -> None:
+    args = _make_args(probe_type="mlp", tokenwise=False)
     probe = get_probe(args)
-    assert isinstance(probe, LinearProbe)
+    assert isinstance(probe, MLPProbe)
+
+
+def test_probe_type_linear_still_selects_the_mlp_probe() -> None:
+    # "linear" is the former name and appears in saved configs and existing YAML.
+    args = _make_args(probe_type="linear", tokenwise=False)
+    assert args.probe_type == "mlp"
+    assert isinstance(get_probe(args), MLPProbe)
 
 
 def test_get_probe_transformer_sequence() -> None:
@@ -147,7 +154,7 @@ def test_rebuild_probe_from_saved_config_linear() -> None:
     original = get_probe(args)
     config_dict = original.config.to_dict()
     rebuilt = rebuild_probe_from_saved_config("linear", False, config_dict)
-    assert isinstance(rebuilt, LinearProbe)
+    assert isinstance(rebuilt, MLPProbe)
     assert rebuilt.config.num_labels == 3
 
 

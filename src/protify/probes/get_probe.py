@@ -2,9 +2,19 @@ import importlib
 from dataclasses import dataclass, field
 from typing import Dict, List
 
-from .linear_probe import LinearProbe, LinearProbeConfig
+from .mlp_probe import MLPProbe, MLPProbeConfig
 from .transformer_probe import TransformerForSequenceClassification, TransformerForTokenClassification, TransformerProbeConfig
 from .lyra_probe import LyraForSequenceClassification, LyraForTokenClassification, LyraConfig
+
+
+# The feed-forward probe was called a linear probe before it grew hidden layers. Saved
+# probe configs, published repositories, and existing YAML all carry the old value, so it
+# resolves to the current name rather than failing.
+_RENAMED_PROBE_TYPES = {'linear': 'mlp'}
+
+
+def normalize_probe_type(probe_type: str) -> str:
+    return _RENAMED_PROBE_TYPES.get(probe_type, probe_type)
 
 
 # External probe types can be registered here by packages on PYTHONPATH.
@@ -37,9 +47,9 @@ def _load_external_probe(probe_type: str, tokenwise: bool, config_kwargs: dict):
 class ProbeArguments:
     def __init__(
             self,
-            probe_type: str = 'linear', # valid options: linear, transformer, lyra
+            probe_type: str = 'mlp', # valid options: mlp, transformer, lyra, xgboost, lightgbm, random_forest
             tokenwise: bool = False,
-            ### Linear Probe
+            ### MLP Probe
             input_size: int = 960,
             hidden_size: int = 8192,
             dropout: float = 0.2,
@@ -70,7 +80,7 @@ class ProbeArguments:
             **kwargs,
 
     ):
-        self.probe_type = probe_type
+        self.probe_type = normalize_probe_type(probe_type)
         self.tokenwise = tokenwise
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -109,9 +119,9 @@ def get_probe(args: ProbeArguments):
             f"(probe_type='transformer', tokenwise=False). Got probe_type={args.probe_type!r}, "
             f"tokenwise={args.tokenwise}."
         )
-    if args.probe_type == 'linear' and not args.tokenwise:
-        config = LinearProbeConfig(**args.__dict__)
-        return LinearProbe(config)
+    if args.probe_type == 'mlp' and not args.tokenwise:
+        config = MLPProbeConfig(**args.__dict__)
+        return MLPProbe(config)
     elif args.probe_type == 'transformer' and not args.tokenwise:
         config = TransformerProbeConfig(**args.__dict__)
         return TransformerForSequenceClassification(config)
@@ -142,9 +152,11 @@ def rebuild_probe_from_saved_config(
     if "pooling_types" in config_dict and "probe_pooling_types" not in config_dict:
         config_dict["probe_pooling_types"] = config_dict["pooling_types"]
 
-    if probe_type == "linear" and not tokenwise:
-        config = LinearProbeConfig(**config_dict)
-        return LinearProbe(config)
+    probe_type = normalize_probe_type(probe_type)
+
+    if probe_type == "mlp" and not tokenwise:
+        config = MLPProbeConfig(**config_dict)
+        return MLPProbe(config)
     if probe_type == "transformer" and not tokenwise:
         config = TransformerProbeConfig(**config_dict)
         return TransformerForSequenceClassification(config)

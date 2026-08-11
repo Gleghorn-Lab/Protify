@@ -33,7 +33,7 @@ Results and logs go to `results/` and `logs/` by default. For full install optio
 | **Configuration** | All CLI argument groups, YAML config (base.yaml), merge behavior, model_names vs model_paths, full examples | [cli_and_config.md](cli_and_config.md) |
 | **Data** | DataArguments, supported datasets, data_dirs, loading flow, column normalization, translation flags, dataset classes | [data.md](data.md) |
 | **Models and embeddings** | Base models (model_names / model_paths), get_base_model and get_tokenizer, EmbeddingArguments, Embedder flow, pooling, SQL vs PTH | [models_and_embeddings.md](models_and_embeddings.md) |
-| **Probes and training** | Probe types (linear, transformer, lyra), ProbeArguments, TrainerArguments, training flows, vectorized multi-seed linear probes, preflight planning, validation, num_runs, save/export | [probes_and_training.md](probes_and_training.md) |
+| **Probes and training** | Probe types (mlp, transformer, lyra, xgboost, lightgbm, random_forest), ProbeArguments, TrainerArguments, training flows, vectorized multi-seed MLP probes, preflight planning, validation, num_runs, save/export | [probes_and_training.md](probes_and_training.md) |
 | **Model components** | For developers: attention, attention_utils, transformer, mlp; which probes use which | [model_components.md](model_components.md) |
 | **ProteinGym** | ProteinGymRunner, scoring methods, run_proteingym_zero_shot, CLI args, compare_scoring_methods, benchmark | [proteingym.md](proteingym.md) |
 | **Visualization** | create_plots (TSV format, six PNGs), regression vs classification metrics, ci_plots, CLI | [visualization.md](visualization.md) |

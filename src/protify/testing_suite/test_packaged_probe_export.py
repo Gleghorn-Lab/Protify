@@ -6,11 +6,11 @@ from pathlib import Path
 from transformers import AutoModel, BertConfig, BertModel, BertTokenizerFast
 
 try:
-    from probes.linear_probe import LinearProbe, LinearProbeConfig
+    from probes.mlp_probe import MLPProbe, MLPProbeConfig
     from probes.packaged_probe_model import PackagedProbeConfig, PackagedProbeModel
     from probes.transformer_probe import TransformerForSequenceClassification, TransformerProbeConfig
 except ImportError:
-    from ..probes.linear_probe import LinearProbe, LinearProbeConfig
+    from ..probes.mlp_probe import MLPProbe, MLPProbeConfig
     from ..probes.packaged_probe_model import PackagedProbeConfig, PackagedProbeModel
     from ..probes.transformer_probe import TransformerForSequenceClassification, TransformerProbeConfig
 
@@ -92,7 +92,7 @@ def test_linear_packaged_roundtrip() -> None:
         model_dir.mkdir(parents=True, exist_ok=True)
 
         backbone, tokenizer = _create_tiny_backbone(backbone_dir)
-        probe_config = LinearProbeConfig(
+        probe_config = MLPProbeConfig(
             input_size=16,
             hidden_size=32,
             dropout=0.1,
@@ -100,10 +100,10 @@ def test_linear_packaged_roundtrip() -> None:
             n_layers=1,
             task_type="singlelabel",
         )
-        probe = LinearProbe(probe_config).eval()
+        probe = MLPProbe(probe_config).eval()
         packaged_config = PackagedProbeConfig(
             base_model_name=str(backbone_dir),
-            probe_type="linear",
+            probe_type="mlp",
             probe_config=probe.config.to_dict(),
             tokenwise=False,
             matrix_embed=False,
@@ -198,7 +198,7 @@ def test_ppi_packaged_inference_with_and_without_token_type_ids() -> None:
         model_dir.mkdir(parents=True, exist_ok=True)
 
         backbone, tokenizer = _create_tiny_backbone(backbone_dir)
-        probe_config = LinearProbeConfig(
+        probe_config = MLPProbeConfig(
             input_size=32,
             hidden_size=24,
             dropout=0.1,
@@ -206,10 +206,10 @@ def test_ppi_packaged_inference_with_and_without_token_type_ids() -> None:
             n_layers=1,
             task_type="singlelabel",
         )
-        probe = LinearProbe(probe_config).eval()
+        probe = MLPProbe(probe_config).eval()
         packaged_config = PackagedProbeConfig(
             base_model_name=str(backbone_dir),
-            probe_type="linear",
+            probe_type="mlp",
             probe_config=probe.config.to_dict(),
             tokenwise=False,
             matrix_embed=False,

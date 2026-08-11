@@ -192,3 +192,26 @@ def test_call_multiple_types_concat(
     pooler = Pooler(types)
     pooled = pooler(emb, attention_mask=mask)  # (b, 3d)
     assert pooled.shape == (batch_size, len(types) * hidden_size)
+
+
+def test_unknown_pooling_type_is_rejected_at_construction() -> None:
+    with pytest.raises(ValueError, match="Unknown pooling types"):
+        Pooler(['mean', 'nonexistent'])
+
+
+def test_repeated_pooling_type_is_rejected() -> None:
+    with pytest.raises(ValueError, match="appear more than once"):
+        Pooler(['mean', 'max', 'mean'])
+
+
+def test_std_pooling_agrees_with_and_without_a_mask(emb: torch.Tensor) -> None:
+    # emb: (b, l, d). A full mask must give the same answer as no mask at all, which
+    # needs both branches to use the population standard deviation.
+    pooler = Pooler(['std'])
+    full_mask = torch.ones(emb.shape[0], emb.shape[1])  # (b, l)
+
+    assert torch.allclose(
+        pooler(emb),  # (b, d)
+        pooler(emb, attention_mask=full_mask),  # (b, d)
+        atol=1e-5,
+    )

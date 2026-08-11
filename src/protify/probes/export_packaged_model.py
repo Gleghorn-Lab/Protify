@@ -21,8 +21,8 @@ except ImportError:
 
 def _infer_probe_type(probe_model: nn.Module) -> str:
     probe_class_name = probe_model.__class__.__name__
-    if probe_class_name == "LinearProbe":
-        return "linear"
+    if probe_class_name == "MLPProbe":
+        return "mlp"
     if probe_class_name in ["TransformerForSequenceClassification", "TransformerForTokenClassification"]:
         return "transformer"
     if probe_class_name in ["LyraForSequenceClassification", "LyraForTokenClassification"]:

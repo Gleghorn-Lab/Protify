@@ -34,8 +34,17 @@ data_dirs: []
 
 
 # BaseModelArguments:
+# ESMC-300-SAE resolves to ESMC-300-SAE-l23-k64-c8192: ESMC 300M read through the Biohub
+# sparse autoencoder at layer 23. Max pooling over its codebook gives sparse features that
+# suit the xgboost probe below. Swap in ESM2-8 for a small dense-embedding baseline.
 model_names:
-  - ESM2-8
+  - ESMC-300-SAE
+# Other ESMC sparse autoencoders: ESMC-600-SAE and ESMC-6B-SAE. A bare alias resolves to
+# the 75% depth layer each backbone publishes (23, 27, and 60). The three settings below
+# override that; leave them null for the defaults.
+sae_layer: null           # any layer 0..n_layers, but only at k 64 and codebook 16384
+sae_k: null               # 16, 32, 64, 128, 256, or 512; depth layer only for non-64
+sae_codebook_dim: null    # 8192, 16384, 32768, 65536, or 131072; depth layer only
 # Alternative: use model_paths + model_types instead of model_names (mutually exclusive)
 # model_paths:
 #   - answerdotai/ModernBERT-base
@@ -44,8 +53,9 @@ model_names:
 
 
 # ProbeArguments:
-probe_type: linear  # valid options: linear, transformer, lyra
+probe_type: xgboost  # valid options: mlp, transformer, lyra, xgboost, lightgbm, random_forest ("linear" is the former name for mlp)
 tokenwise: !!bool false
+probe_n_jobs: !!int -1  # workers for xgboost, lightgbm, and random_forest probes
 hidden_size: !!int 8192
 dropout: !!float 0.2
 n_layers: !!int 1
@@ -83,8 +93,10 @@ embedding_batch_size: !!int 4
 num_workers: !!int 0
 download_embeddings: !!bool false
 matrix_embed: !!bool false
+# SAE models accept max, mean, and sum only, and pool inside their encoder pass.
+# Dense embedding models accept the full set in pooler.py.
 embedding_pooling_types:
-  - mean
+  - max
 embedding_hidden_state_index: !!int -1
 save_embeddings: !!bool false
 embed_dtype: !!str float32

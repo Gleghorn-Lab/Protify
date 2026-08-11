@@ -68,7 +68,7 @@ The schema is defined by the union of [base.yaml](../src/protify/yamls/base.yaml
 | `--data_names` | list | [] | Dataset names (HuggingFace or preset e.g. standard_benchmark). |
 | `--data_dirs` | list | [] | Local split directories with train and valid/test aliases; accepts tabular files or labeled FASTA. |
 | `--aa_to_dna`, `--aa_to_rna`, `--dna_to_aa`, `--rna_to_aa`, `--codon_to_aa`, `--aa_to_codon` | flag | False | Sequence translation (only one may be True). |
-| `--random_pair_flipping` | flag | False | Random swap of paired inputs (e.g. PPI). |
+| `--random_pair_flipping` | flag | False | Randomly swap paired inputs (e.g. PPI) on the training split only. Validation and test keep the dataset order so a score does not depend on the random state. |
 | `--multi_column` | list | None | Sequence column names for multi-input tasks. |
 
 ### Base model
@@ -80,14 +80,18 @@ The schema is defined by the union of [base.yaml](../src/protify/yamls/base.yaml
 | `--model_types` | list | None | Type keywords for each path (esm2, custom, etc.). |
 | `--model_dtype` | choice | bf16 | fp32, fp16, bf16, float32, float16, bfloat16. |
 | `--use_xformers` | flag | False | Use xformers attention for AMPLIFY. |
+| `--sae_layer` | int | None | ESMC hidden-state layer the sparse autoencoder reads. Defaults to the depth layer each backbone publishes (23, 27, 60). |
+| `--sae_k` | choice | None | Active SAE features per residue: 16, 32, 64, 128, 256, 512. Defaults to 64. |
+| `--sae_codebook_dim` | choice | None | SAE codebook width, the embedding dimension per pooling type: 8192, 16384, 32768, 65536, 131072. Defaults to 8192. |
 
 ### Probe
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `--probe_type` | choice | linear | linear, transformer, lyra. |
+| `--probe_type` | choice | mlp | mlp, transformer, lyra, xgboost, lightgbm, random_forest. "linear" is the former name for mlp. |
 | `--tokenwise` | flag | False | Token-wise prediction. |
-| `--hidden_size` | int | 8192 | Hidden size for linear probe MLP. |
+| `--probe_n_jobs` | int | -1 | Workers for xgboost, lightgbm, and random_forest probes. |
+| `--hidden_size` | int | 8192 | Hidden size for the MLP probe. |
 | `--transformer_hidden_size` | int | 512 | Hidden size for transformer probe. |
 | `--dropout` | float | 0.2 | Dropout rate. |
 | `--n_layers` | int | 1 | Number of layers. |
@@ -163,7 +167,7 @@ The schema is defined by the union of [base.yaml](../src/protify/yamls/base.yaml
 | `--full_finetuning` | flag | False | Full model finetuning. |
 | `--hybrid_probe` | flag | False | Hybrid probe then finetune. |
 | `--num_runs` | int | 1 | Number of seeds; report mean and std. |
-| `--parallel_probe_runs` | flag | False | For eligible pooled linear probes, train all `--num_runs` seeds in one vectorized trainer pass. |
+| `--parallel_probe_runs` | flag | False | For eligible pooled MLP probes, train all `--num_runs` seeds in one vectorized trainer pass. |
 | `--parallel_probe_batch_mode` | choice | shared | With `--parallel_probe_runs`, use `shared` minibatches across runs or `run_specific` deterministic per-run training permutations. |
 | `--parallel_probe_index_strategy` | choice | permutation | With `--parallel_probe_batch_mode run_specific`, use materialized per-run `permutation` indices or memory-free deterministic `affine` bijections. |
 | `--parallel_probe_max_group_size` | int | None | Optional cap on seeds per vectorized probe bank; larger `--num_runs` values are chunked into multiple parallel Trainer invocations. |
@@ -254,7 +258,7 @@ model_names: [ESM2-8]
 # model_types: [...]
 
 # ProbeArguments
-probe_type: linear
+probe_type: mlp
 tokenwise: false
 # ...
 

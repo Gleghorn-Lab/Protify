@@ -54,6 +54,24 @@ SPLIT_ALIASES = {
 }
 
 
+def _to_numpy(embedding: torch.Tensor) -> np.ndarray:
+    """Convert an embedding to numpy, widening bfloat16 which numpy cannot represent."""
+    if embedding.dtype == torch.bfloat16:
+        embedding = embedding.float()
+    return embedding.numpy()
+
+
+def _as_rows(embedding: np.ndarray, seq: str, full: bool) -> np.ndarray:
+    """Reshape one embedding into rows so concatenation yields an (n, d) matrix.
+
+    The SQL backend returns a pooled vector at its stored rank, (d,), while the PTH
+    backend already returns (1, d). Normalizing here keeps both paths building the same
+    matrix.
+    """
+    # embedding: (d,) or (1, d) pooled, or (l, d) per-residue
+    return embedding.reshape(len(seq), -1) if full else embedding.reshape(1, -1)
+
+
 
 @dataclass
 class DataArguments:
@@ -215,7 +233,7 @@ class DataMixin:
         fallback_shape = (1, -1) if not self._full else (len(seq), -1)
         embedding = embedding_blob_to_tensor(raw, fallback_shape=fallback_shape)
         if not cast_to_torch:
-            embedding = embedding.numpy()
+            embedding = _to_numpy(embedding)
         return embedding
 
     def _select_from_pth(self, emb_dict: Dict[str, torch.Tensor], seq: str, cast_to_np: bool = False) -> torch.Tensor:
@@ -223,7 +241,7 @@ class DataMixin:
         if self._full:
             embedding = embedding.reshape(len(seq), -1)
         if cast_to_np:
-            embedding = embedding.numpy()
+            embedding = _to_numpy(embedding)
         return embedding
 
     def _labels_to_numpy(self, labels: list) -> np.ndarray:
@@ -1095,30 +1113,30 @@ class DataMixin:
             with sqlite3.connect(save_path) as conn:
                 c = conn.cursor()
                 for seq in train_seqs:
-                    embedding = self._select_from_sql(c, seq, cast_to_torch=False)
+                    embedding = _as_rows(self._select_from_sql(c, seq, cast_to_torch=False), seq, self._full)
                     train_array.append(embedding)
 
                 for seq in valid_seqs:
-                    embedding = self._select_from_sql(c, seq, cast_to_torch=False)
+                    embedding = _as_rows(self._select_from_sql(c, seq, cast_to_torch=False), seq, self._full)
                     valid_array.append(embedding)
 
                 for seq in test_seqs:
-                    embedding = self._select_from_sql(c, seq, cast_to_torch=False)
+                    embedding = _as_rows(self._select_from_sql(c, seq, cast_to_torch=False), seq, self._full)
                     test_array.append(embedding)
         else:
             filename = get_embedding_filename(model_name, self._full, pooling_types, 'pth', hidden_state_index)
             save_path = os.path.join(save_dir, filename)
             emb_dict = torch.load(save_path)
             for seq in train_seqs:
-                embedding = self._select_from_pth(emb_dict, seq, cast_to_np=True)
+                embedding = _as_rows(self._select_from_pth(emb_dict, seq, cast_to_np=True), seq, self._full)
                 train_array.append(embedding)
                 
             for seq in valid_seqs:
-                embedding = self._select_from_pth(emb_dict, seq, cast_to_np=True)
+                embedding = _as_rows(self._select_from_pth(emb_dict, seq, cast_to_np=True), seq, self._full)
                 valid_array.append(embedding)
 
             for seq in test_seqs:
-                embedding = self._select_from_pth(emb_dict, seq, cast_to_np=True)
+                embedding = _as_rows(self._select_from_pth(emb_dict, seq, cast_to_np=True), seq, self._full)
                 test_array.append(embedding)
             del emb_dict
 
@@ -1146,7 +1164,11 @@ class DataMixin:
             valid_seqs_b,
             test_seqs_a,
             test_seqs_b,
+            flip_train_pairs: bool = False,
         ):
+        # Interaction is symmetric but concatenation is not, so swapping A and B augments
+        # the training set. Validation and test keep the dataset order, because swapping
+        # there would make a score depend on the random state rather than the model.
         save_dir = self.embedding_args.embedding_save_dir
         train_array, valid_array, test_array = [], [], []
         pooling_types = self.embedding_args.pooling_types
@@ -1157,42 +1179,40 @@ class DataMixin:
             with sqlite3.connect(save_path) as conn:
                 c = conn.cursor()
                 for seq_a, seq_b in zip(train_seqs_a, train_seqs_b):
-                    seq_a, seq_b = self._random_order(seq_a, seq_b)
-                    embedding_a = self._select_from_sql(c, seq_a, cast_to_torch=False)
-                    embedding_b = self._select_from_sql(c, seq_b, cast_to_torch=False)
+                    if flip_train_pairs:
+                        seq_a, seq_b = self._random_order(seq_a, seq_b)
+                    embedding_a = _as_rows(self._select_from_sql(c, seq_a, cast_to_torch=False), seq_a, self._full)
+                    embedding_b = _as_rows(self._select_from_sql(c, seq_b, cast_to_torch=False), seq_b, self._full)
                     train_array.append(np.concatenate([embedding_a, embedding_b], axis=-1))
 
                 for seq_a, seq_b in zip(valid_seqs_a, valid_seqs_b):
-                    seq_a, seq_b = self._random_order(seq_a, seq_b)
-                    embedding_a = self._select_from_sql(c, seq_a, cast_to_torch=False)
-                    embedding_b = self._select_from_sql(c, seq_b, cast_to_torch=False)
+                    embedding_a = _as_rows(self._select_from_sql(c, seq_a, cast_to_torch=False), seq_a, self._full)
+                    embedding_b = _as_rows(self._select_from_sql(c, seq_b, cast_to_torch=False), seq_b, self._full)
                     valid_array.append(np.concatenate([embedding_a, embedding_b], axis=-1))
 
                 for seq_a, seq_b in zip(test_seqs_a, test_seqs_b):
-                    seq_a, seq_b = self._random_order(seq_a, seq_b)
-                    embedding_a = self._select_from_sql(c, seq_a, cast_to_torch=False)
-                    embedding_b = self._select_from_sql(c, seq_b, cast_to_torch=False)
+                    embedding_a = _as_rows(self._select_from_sql(c, seq_a, cast_to_torch=False), seq_a, self._full)
+                    embedding_b = _as_rows(self._select_from_sql(c, seq_b, cast_to_torch=False), seq_b, self._full)
                     test_array.append(np.concatenate([embedding_a, embedding_b], axis=-1))
         else:
             filename = get_embedding_filename(model_name, self._full, pooling_types, 'pth', hidden_state_index)
             save_path = os.path.join(save_dir, filename)
             emb_dict = torch.load(save_path)
             for seq_a, seq_b in zip(train_seqs_a, train_seqs_b):
-                seq_a, seq_b = self._random_order(seq_a, seq_b)
-                embedding_a = self._select_from_pth(emb_dict, seq_a, cast_to_np=True)
-                embedding_b = self._select_from_pth(emb_dict, seq_b, cast_to_np=True)
+                if flip_train_pairs:
+                    seq_a, seq_b = self._random_order(seq_a, seq_b)
+                embedding_a = _as_rows(self._select_from_pth(emb_dict, seq_a, cast_to_np=True), seq_a, self._full)
+                embedding_b = _as_rows(self._select_from_pth(emb_dict, seq_b, cast_to_np=True), seq_b, self._full)
                 train_array.append(np.concatenate([embedding_a, embedding_b], axis=-1))
 
             for seq_a, seq_b in zip(valid_seqs_a, valid_seqs_b):
-                seq_a, seq_b = self._random_order(seq_a, seq_b)
-                embedding_a = self._select_from_pth(emb_dict, seq_a, cast_to_np=True)
-                embedding_b = self._select_from_pth(emb_dict, seq_b, cast_to_np=True)
+                embedding_a = _as_rows(self._select_from_pth(emb_dict, seq_a, cast_to_np=True), seq_a, self._full)
+                embedding_b = _as_rows(self._select_from_pth(emb_dict, seq_b, cast_to_np=True), seq_b, self._full)
                 valid_array.append(np.concatenate([embedding_a, embedding_b], axis=-1))
 
             for seq_a, seq_b in zip(test_seqs_a, test_seqs_b):
-                seq_a, seq_b = self._random_order(seq_a, seq_b)
-                embedding_a = self._select_from_pth(emb_dict, seq_a, cast_to_np=True)
-                embedding_b = self._select_from_pth(emb_dict, seq_b, cast_to_np=True)
+                embedding_a = _as_rows(self._select_from_pth(emb_dict, seq_a, cast_to_np=True), seq_a, self._full)
+                embedding_b = _as_rows(self._select_from_pth(emb_dict, seq_b, cast_to_np=True), seq_b, self._full)
                 test_array.append(np.concatenate([embedding_a, embedding_b], axis=-1))
             del emb_dict
 
@@ -1211,7 +1231,18 @@ class DataMixin:
         print_message(f'Test: {test_array.shape}')
         return train_array, valid_array, test_array
 
-    def prepare_scikit_dataset(self, model_name, dataset):
+    def prepare_scikit_dataset(
+        self, model_name, dataset, standardize: bool = True, flip_train_pairs: bool = False
+    ):
+        """Materialize pooled embeddings and labels as numpy arrays.
+
+        `standardize` exists for axis-aligned learners: a per-feature shift and scale
+        cannot change which splits a decision tree can express, and centering would turn
+        a sparse SAE feature matrix dense.
+
+        `flip_train_pairs` carries --random_pair_flipping into the paired builder and is
+        ignored for single-sequence datasets.
+        """
         train_set, valid_set, test_set, _, label_type, ppi = dataset
 
         if ppi:
@@ -1223,6 +1254,7 @@ class DataMixin:
                 list(valid_set['SeqB']),
                 list(test_set['SeqA']),
                 list(test_set['SeqB']),
+                flip_train_pairs=flip_train_pairs,
             )
         else:
             X_train, X_valid, X_test = self.build_vector_numpy_dataset_from_embeddings(
@@ -1232,7 +1264,7 @@ class DataMixin:
                 list(test_set['seqs']),
             )
 
-        embedding_scaler = self.embedding_args.embedding_scaler
+        embedding_scaler = self.embedding_args.embedding_scaler and standardize
         assert isinstance(embedding_scaler, bool), f"Invalid embedding_scaler: {embedding_scaler}"
         if not self._full and embedding_scaler:
             print_message('Fitting StandardScaler on scikit training embeddings')

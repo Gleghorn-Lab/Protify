@@ -752,7 +752,7 @@ Protify is an open source platform designed to simplify and democratize workflow
         return (
             self.trainer_args.parallel_probe_runs
             and self.trainer_args.num_runs > 1
-            and self.probe_args.probe_type == 'linear'
+            and self.probe_args.probe_type == 'mlp'
             and not self.probe_args.tokenwise
             and not self.embedding_args.matrix_embed
             and not ppi
@@ -961,7 +961,7 @@ Protify is an open source platform designed to simplify and democratize workflow
                 )
                 print_message(
                     f"Raw best parallel probe uploaded to Hugging Face Hub: {repo_id} "
-                    f"(load with e.g. LinearProbe.from_pretrained('{repo_id}'))"
+                    f"(load with e.g. MLPProbe.from_pretrained('{repo_id}'))"
                 )
             else:
                 packaged_export_succeeded = False
@@ -1234,7 +1234,7 @@ Protify is an open source platform designed to simplify and democratize workflow
                         best_run_idx = global_run_idx
                         best_run_id = run_spec.run_id
                         best_seed = run_spec.seed
-                        best_model = parallel_model.to_linear_probe(local_run_idx)
+                        best_model = parallel_model.to_mlp_probe(local_run_idx)
                         best_y_pred = test_logits[:, local_run_idx, :].astype(np.float32)
                         best_y_true = test_labels.astype(np.float32)
 

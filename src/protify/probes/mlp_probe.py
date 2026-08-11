@@ -15,7 +15,9 @@ except ImportError:
 from .losses import get_loss_fct
 
 
-class LinearProbeConfig(PretrainedConfig):
+class MLPProbeConfig(PretrainedConfig):
+    # Serialized identifier from when this probe was called a linear probe. Published
+    # probe repositories carry it in their config.json, so it stays as written.
     model_type = "linear_probe"
 
     def __init__(
@@ -41,11 +43,17 @@ class LinearProbeConfig(PretrainedConfig):
         self.use_bias = use_bias
 
 
-class LinearProbe(PreTrainedModel):
-    config_class = LinearProbeConfig
+class MLPProbe(PreTrainedModel):
+    """Feed-forward probe over a pooled embedding.
+
+    Named for what it is: a stack of Linear, ReLU, and Dropout layers, not a single
+    linear map. `--probe_type linear` still selects it.
+    """
+
+    config_class = MLPProbeConfig
     all_tied_weights_keys = {}
 
-    def __init__(self, config: LinearProbeConfig) -> None:
+    def __init__(self, config: MLPProbeConfig) -> None:
         super().__init__(config)
         self.config = config
         self.task_type = config.task_type

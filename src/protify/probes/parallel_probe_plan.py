@@ -8,6 +8,7 @@ except ImportError:
         from protify.model_components.mlp import intermediate_correction_fn
     except ImportError:
         from model_components.mlp import intermediate_correction_fn
+from .get_probe import normalize_probe_type
 
 
 ParallelProbeCompatibilityKey = Tuple[object, ...]
@@ -40,9 +41,14 @@ class ParallelProbeRunSpec:
     full_finetuning: bool = False
     save_model: bool = False
 
+    def __post_init__(self) -> None:
+        # Specs arrive from probe arguments, planning scripts, and saved manifests, so
+        # the former probe name is resolved here rather than at every comparison.
+        object.__setattr__(self, 'probe_type', normalize_probe_type(self.probe_type))
+
     def is_parallel_linear_eligible(self) -> bool:
         return (
-            self.probe_type == 'linear'
+            self.probe_type == 'mlp'
             and not self.tokenwise
             and not self.matrix_embed
             and not self.full_finetuning
@@ -50,7 +56,7 @@ class ParallelProbeRunSpec:
 
     def ineligibility_reasons(self) -> Tuple[str, ...]:
         reasons = []
-        if self.probe_type != 'linear':
+        if self.probe_type != 'mlp':
             reasons.append('probe_type')
         if self.tokenwise:
             reasons.append('tokenwise')
@@ -474,7 +480,7 @@ def linear_probe_parameter_count(
 
 
 def linear_probe_parameter_count_for_spec(spec: ParallelProbeRunSpec) -> int:
-    assert spec.probe_type == 'linear', "Only linear probe specs have known parameter counts."
+    assert spec.probe_type == 'mlp', "Only MLP probe specs have known parameter counts."
     return linear_probe_parameter_count(
         input_size=spec.input_size,
         hidden_size=spec.hidden_size,
@@ -536,7 +542,7 @@ def estimate_parallel_probe_group(
     assert dataset_size >= 0, "dataset_size must be non-negative."
     assert index_dtype_bytes > 0, "index_dtype_bytes must be positive."
 
-    parameter_count_known = group.runs[0].probe_type == 'linear'
+    parameter_count_known = group.runs[0].probe_type == 'mlp'
     if parameter_count_known:
         single_probe_parameter_count = linear_probe_parameter_count_for_spec(group.runs[0])
         batch_activation_count = linear_probe_batch_activation_count(

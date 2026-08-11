@@ -4,7 +4,7 @@ import pytest
 
 try:
     from src.protify import probes as probes_package
-    from src.protify.probes.linear_probe import LinearProbe, LinearProbeConfig
+    from src.protify.probes.mlp_probe import MLPProbe, MLPProbeConfig
     from src.protify.probes.parallel_probe_plan import (
         ParallelProbeExecutionPlan,
         ParallelProbeGroup,
@@ -29,7 +29,7 @@ try:
 except ImportError:
     try:
         from protify import probes as probes_package
-        from protify.probes.linear_probe import LinearProbe, LinearProbeConfig
+        from protify.probes.mlp_probe import MLPProbe, MLPProbeConfig
         from protify.probes.parallel_probe_plan import (
             ParallelProbeExecutionPlan,
             ParallelProbeGroup,
@@ -53,7 +53,7 @@ except ImportError:
         )
     except ImportError:
         from .. import probes as probes_package
-        from ..probes.linear_probe import LinearProbe, LinearProbeConfig
+        from ..probes.mlp_probe import MLPProbe, MLPProbeConfig
         from ..probes.parallel_probe_plan import (
             ParallelProbeExecutionPlan,
             ParallelProbeGroup,
@@ -86,7 +86,7 @@ def _run_spec(run_id: str = 'run-0', seed: int = 7) -> ParallelProbeRunSpec:
         embedding_key='ESM2-35/EC/mean/v1',
         dataset_key='EC/split/v1',
         trainer_key='epochs=1|batch=8|lr=1e-4',
-        probe_type='linear',
+        probe_type='mlp',
         input_size=8,
         hidden_size=4,
         dropout=0.0,
@@ -155,7 +155,7 @@ def test_build_seed_run_specs_groups_into_one_vectorized_group() -> None:
         embedding_key='ESM2-35/EC/mean/v1',
         dataset_key='EC/split/v1',
         trainer_key='epochs=1|batch=8|lr=1e-4',
-        probe_type='linear',
+        probe_type='mlp',
         input_size=8,
         hidden_size=4,
         dropout=0.0,
@@ -325,7 +325,7 @@ def test_parallel_probe_plan_rejects_invalid_max_group_size() -> None:
 
 
 def test_linear_probe_parameter_count_matches_actual_model_parameters() -> None:
-    config = LinearProbeConfig(
+    config = MLPProbeConfig(
         input_size=8,
         hidden_size=4,
         dropout=0.0,
@@ -335,7 +335,7 @@ def test_linear_probe_parameter_count_matches_actual_model_parameters() -> None:
         pre_ln=True,
         use_bias=True,
     )
-    model = LinearProbe(config)
+    model = MLPProbe(config)
     expected = sum(parameter.numel() for parameter in model.parameters())
 
     observed = linear_probe_parameter_count(
@@ -595,7 +595,7 @@ def test_build_seed_run_specs_rejects_empty_run_sets() -> None:
             embedding_key='ESM2-35/EC/mean/v1',
             dataset_key='EC/split/v1',
             trainer_key='epochs=1|batch=8|lr=1e-4',
-            probe_type='linear',
+            probe_type='mlp',
             input_size=8,
             hidden_size=4,
             dropout=0.0,
@@ -780,7 +780,7 @@ def test_wave_schedule_rejects_invalid_packing_args() -> None:
         embedding_key='ESM2-35/EC/mean/v1',
         dataset_key='EC/split/v1',
         trainer_key='epochs=1|batch=8|lr=1e-4',
-        probe_type='linear',
+        probe_type='mlp',
         input_size=8,
         hidden_size=4,
         dropout=0.0,
