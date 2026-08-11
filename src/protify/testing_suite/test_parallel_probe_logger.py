@@ -56,7 +56,7 @@ def test_probe_result_identity_fields_are_written_to_results_tsv(tmp_path) -> No
         log_dir=str(tmp_path / "logs"),
         results_dir=str(tmp_path / "results"),
         replay_path=None,
-        probe_type="linear",
+        probe_type="mlp",
         hidden_size=64,
         dropout=0.2,
         n_layers=0,
@@ -76,7 +76,7 @@ def test_probe_result_identity_fields_are_written_to_results_tsv(tmp_path) -> No
     )
 
     stored = logger.logger_data_tracking["EC"]["ESM2-35"]
-    assert stored["probe_type"] == "linear"
+    assert stored["probe_type"] == "mlp"
     assert stored["hidden_size"] == 64
     assert stored["dropout"] == 0.2
     assert stored["n_layers"] == 0
@@ -86,7 +86,7 @@ def test_probe_result_identity_fields_are_written_to_results_tsv(tmp_path) -> No
     with open(logger.results_file, "r", newline="", encoding="utf-8") as handle:
         rows = list(csv.reader(handle, delimiter="\t"))
     metrics = json.loads(rows[1][1])
-    assert metrics["probe_type"] == "linear"
+    assert metrics["probe_type"] == "mlp"
     assert metrics["hidden_size"] == 64
     assert metrics["dropout"] == 0.2
     assert metrics["n_layers"] == 0

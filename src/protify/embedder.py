@@ -334,11 +334,15 @@ class Embedder:
             embeddings_dict: Dict[str, torch.Tensor]) -> Optional[Dict[str, torch.Tensor]]:
         os.makedirs(self.embedding_save_dir, exist_ok=True)
         model = embedding_model.to(self.device).eval()
+        sparse_storage = getattr(model, "sparse_storage", False)
+        # SAE models reduce inside the encoder and return (b, p * c), so a Pooler here would
+        # never be called, and would reject the names only they accept, such as 'sum'.
+        pools_internally = getattr(model, "pools_internally", False)
         dynamic = self.padding == 'longest'
         model = maybe_compile(model, dynamic=dynamic)
         device = self.device
         collate_fn = build_collator(tokenizer, padding=self.padding, max_length=self.max_length)
-        if self.matrix_embed:
+        if self.matrix_embed or pools_internally:
             pooler = None
         else:
             print_message(f'Pooling types: {self.pooling_types}')
@@ -398,19 +402,15 @@ class Embedder:
 
             with torch.autocast(device.type, dtype=self.embed_dtype, enabled=self.autocast):
                 if 'parti' in self.pooling_types:
-                    try:
-                        residue_embeddings, attentions = model(
-                            **batch,
-                            output_attentions=True,
-                            **hidden_kwargs,
-                        )
-                        embeddings = _get_embeddings(residue_embeddings, attention_mask=attention_mask, attentions=attentions).cpu()
-                    except Exception as e:
-                        print_message(f"Error in parti pooling: {e}\nDefaulting to mean pooling")
-                        self.pooling_types = ['mean']
-                        pooler = Pooler(self.pooling_types)
-                        residue_embeddings = model(**batch, **hidden_kwargs)
-                        embeddings = _get_embeddings(residue_embeddings, attention_mask=attention_mask).cpu()
+                    # A failure here used to switch the whole run to mean pooling, which
+                    # changed the embedding width partway through a cache and left the
+                    # filename claiming 'parti'. Let it raise instead.
+                    residue_embeddings, attentions = model(
+                        **batch,
+                        output_attentions=True,
+                        **hidden_kwargs,
+                    )
+                    embeddings = _get_embeddings(residue_embeddings, attention_mask=attention_mask, attentions=attentions).cpu()
                 else:
                     residue_embeddings = model(**batch, **hidden_kwargs)
                     embeddings = _get_embeddings(residue_embeddings, attention_mask=attention_mask).cpu()
@@ -420,9 +420,9 @@ class Embedder:
                 if self.matrix_embed:
                     batch_rows = []
                     for seq, emb, mask in zip(seqs, embeddings, attention_mask.cpu()):
-                        batch_rows.append((seq, tensor_to_embedding_blob(emb[mask.bool()])))
+                        batch_rows.append((seq, tensor_to_embedding_blob(emb[mask.bool()], sparse=sparse_storage)))
                 else:
-                    blobs = batch_tensor_to_blobs(embeddings)
+                    blobs = batch_tensor_to_blobs(embeddings, sparse=sparse_storage)
                     batch_rows = list(zip(seqs, blobs))
                 sql_writer.write_batch(batch_rows)
             else:
@@ -471,13 +471,20 @@ class Embedder:
         def _worker(rank: int, shard: List[str]) -> None:
             torch.cuda.set_device(rank)
             device = torch.device(f'cuda:{rank}')
-            model_obj, tokenizer = get_base_model(dispatch_name, dtype=self.model_dtype, model_path=model_path)
+            model_obj, tokenizer = get_base_model(
+                dispatch_name,
+                dtype=self.model_dtype,
+                model_path=model_path,
+                pooling_types=None if self.matrix_embed else self.pooling_types,
+            )
             model_obj = model_obj.to(device).eval()
+            sparse_storage = getattr(model_obj, "sparse_storage", False)
+            pools_internally = getattr(model_obj, "pools_internally", False)
             dynamic = self.padding == 'longest'
             model_obj = maybe_compile(model_obj, dynamic=dynamic)
             collate_fn = build_collator(tokenizer, padding=self.padding, max_length=self.max_length)
 
-            if self.matrix_embed:
+            if self.matrix_embed or pools_internally:
                 pooler = None
             else:
                 pooler = Pooler(self.pooling_types)
@@ -542,9 +549,9 @@ class Embedder:
                         if self.matrix_embed:
                             batch_rows = []
                             for seq, emb, mask in zip(seqs, embeddings, attention_mask.cpu()):
-                                batch_rows.append((seq, tensor_to_embedding_blob(emb[mask.bool()])))
+                                batch_rows.append((seq, tensor_to_embedding_blob(emb[mask.bool()], sparse=sparse_storage)))
                         else:
-                            blobs = batch_tensor_to_blobs(embeddings)
+                            blobs = batch_tensor_to_blobs(embeddings, sparse=sparse_storage)
                             batch_rows = list(zip(seqs, blobs))
                         worker_sql_writer.write_batch(batch_rows)
                     else:
@@ -595,7 +602,14 @@ class Embedder:
                     to_embed, save_path, dispatch_name, model_path, embeddings_dict,
                 )
             else:
-                model, tokenizer = get_base_model(dispatch_name, dtype=self.model_dtype, model_path=model_path)
+                # SAE models fuse pooling into their encoder pass, so they need the
+                # pooling choice up front and return pooled vectors directly.
+                model, tokenizer = get_base_model(
+                    dispatch_name,
+                    dtype=self.model_dtype,
+                    model_path=model_path,
+                    pooling_types=None if self.matrix_embed else self.pooling_types,
+                )
                 return self._embed_sequences(to_embed, save_path, model, tokenizer, embeddings_dict)
         else:
             print_message(f"No sequences to embed with {model_name}")

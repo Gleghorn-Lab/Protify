@@ -9,7 +9,7 @@ import torch.nn.functional as F
 try:
     from src.protify import probes as probes_package
     from src.protify.probes import trainers as trainers_module
-    from src.protify.probes.linear_probe import LinearProbe, LinearProbeConfig
+    from src.protify.probes.mlp_probe import MLPProbe, MLPProbeConfig
     from src.protify.probes.parallel_linear_probe import (
         ParallelLinearProbe,
         ParallelLinearProbeConfig,
@@ -27,7 +27,7 @@ except ImportError:
     try:
         from protify import probes as probes_package
         from protify.probes import trainers as trainers_module
-        from protify.probes.linear_probe import LinearProbe, LinearProbeConfig
+        from protify.probes.mlp_probe import MLPProbe, MLPProbeConfig
         from protify.probes.parallel_linear_probe import (
             ParallelLinearProbe,
             ParallelLinearProbeConfig,
@@ -44,7 +44,7 @@ except ImportError:
     except ImportError:
         from .. import probes as probes_package
         from ..probes import trainers as trainers_module
-        from ..probes.linear_probe import LinearProbe, LinearProbeConfig
+        from ..probes.mlp_probe import MLPProbe, MLPProbeConfig
         from ..probes.parallel_linear_probe import (
             ParallelLinearProbe,
             ParallelLinearProbeConfig,
@@ -72,7 +72,7 @@ def _trainer_mixin_for_parallel_tests(task_type: str = 'singlelabel') -> Trainer
     mixin = TrainerMixin(trainer_args=trainer_args)
     mixin.embedding_args = SimpleNamespace(matrix_embed=False)
     mixin.probe_args = SimpleNamespace(
-        probe_type='linear',
+        probe_type='mlp',
         tokenwise=False,
         input_size=4,
         hidden_size=8,
@@ -170,7 +170,7 @@ def test_parallel_linear_probe_exports_matching_single_run_probe() -> None:
         run_seeds=[101, 102, 103],
     )
     parallel_probe = ParallelLinearProbe(config).eval()
-    single_probe = parallel_probe.to_linear_probe(1).eval()
+    single_probe = parallel_probe.to_mlp_probe(1).eval()
     embeddings = torch.randn(9, 6)
 
     parallel_logits = parallel_probe(embeddings=embeddings).logits[:, 1, :]
@@ -208,7 +208,7 @@ def test_parallel_linear_probe_ensemble_matches_average_exported_single_probes(t
     ensemble_logits = ensemble(embeddings=embeddings).logits
     single_logits = []
     for run_idx in range(config.num_runs):
-        single_probe = parallel_probe.to_linear_probe(run_idx).eval()
+        single_probe = parallel_probe.to_mlp_probe(run_idx).eval()
         single_logits.append(single_probe(embeddings=embeddings).logits)
     expected = torch.stack(single_logits, dim=1).mean(dim=1)
 
@@ -235,8 +235,8 @@ def test_parallel_linear_probe_ensemble_can_average_selected_runs() -> None:
     output = ensemble(embeddings=embeddings)
     expected = torch.stack(
         [
-            parallel_probe.to_linear_probe(1).eval()(embeddings=embeddings).logits,
-            parallel_probe.to_linear_probe(3).eval()(embeddings=embeddings).logits,
+            parallel_probe.to_mlp_probe(1).eval()(embeddings=embeddings).logits,
+            parallel_probe.to_mlp_probe(3).eval()(embeddings=embeddings).logits,
         ],
         dim=1,
     ).mean(dim=1)
@@ -265,7 +265,7 @@ def test_parallel_linear_probe_ensemble_accepts_run_specific_embeddings() -> Non
     output = ensemble(embeddings=embeddings)
     expected = torch.stack(
         [
-            parallel_probe.to_linear_probe(run_idx).eval()(embeddings=embeddings[:, run_idx, :]).logits
+            parallel_probe.to_mlp_probe(run_idx).eval()(embeddings=embeddings[:, run_idx, :]).logits
             for run_idx in range(config.num_runs)
         ],
         dim=1,
@@ -366,8 +366,8 @@ def test_parallel_linear_probe_seeded_run_matches_linear_probe_initialization() 
     parallel_probe = ParallelLinearProbe(config).eval()
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(seed)
-        single_probe = LinearProbe(
-            LinearProbeConfig(
+        single_probe = MLPProbe(
+            MLPProbeConfig(
                 input_size=5,
                 hidden_size=7,
                 dropout=0.0,
@@ -453,7 +453,7 @@ def test_parallel_linear_probe_shared_eval_matches_exported_single_probes(task_t
     parallel_output = parallel_probe(embeddings=embeddings, labels=shared_labels)
     single_losses = []
     for run_idx in range(config.num_runs):
-        single_probe = parallel_probe.to_linear_probe(run_idx).eval()
+        single_probe = parallel_probe.to_mlp_probe(run_idx).eval()
         single_output = single_probe(embeddings=embeddings, labels=shared_labels)
         assert torch.allclose(parallel_output.logits[:, run_idx, :], single_output.logits, atol=1e-6)
         single_losses.append(single_output.loss)
@@ -491,7 +491,7 @@ def test_parallel_linear_probe_run_specific_eval_matches_exported_single_probes(
     parallel_output = parallel_probe(embeddings=embeddings, labels=run_labels)
     single_losses = []
     for run_idx in range(config.num_runs):
-        single_probe = parallel_probe.to_linear_probe(run_idx).eval()
+        single_probe = parallel_probe.to_mlp_probe(run_idx).eval()
         if task_type == 'singlelabel':
             single_labels = run_labels[:, run_idx]
         elif task_type == 'multilabel':
@@ -538,7 +538,7 @@ def test_parallel_linear_probe_accepts_run_specific_batches() -> None:
     assert output.loss.ndim == 0
     assert torch.isfinite(output.loss)
     for run_idx in range(config.num_runs):
-        single_probe = parallel_probe.to_linear_probe(run_idx).eval()
+        single_probe = parallel_probe.to_mlp_probe(run_idx).eval()
         single_logits = single_probe(embeddings=embeddings[:, run_idx, :]).logits
         assert torch.allclose(output.logits[:, run_idx, :], single_logits, atol=1e-6)
 
@@ -829,7 +829,7 @@ def test_parallel_linear_probe_sigmoid_regression_ignores_masked_shared_labels()
     output = parallel_probe(embeddings=embeddings, labels=labels)
     single_losses = []
     for run_idx in range(config.num_runs):
-        single_probe = parallel_probe.to_linear_probe(run_idx).eval()
+        single_probe = parallel_probe.to_mlp_probe(run_idx).eval()
         single_output = single_probe(embeddings=embeddings, labels=labels)
         single_losses.append(single_output.loss)
 
@@ -863,7 +863,7 @@ def test_parallel_linear_probe_sigmoid_regression_ignores_masked_run_specific_la
     output = parallel_probe(embeddings=embeddings, labels=labels)
     single_losses = []
     for run_idx in range(config.num_runs):
-        single_probe = parallel_probe.to_linear_probe(run_idx).eval()
+        single_probe = parallel_probe.to_mlp_probe(run_idx).eval()
         single_output = single_probe(
             embeddings=embeddings[:, run_idx, :],
             labels=labels[:, run_idx],
@@ -885,7 +885,7 @@ def test_parallel_probe_trainer_eligibility_gate() -> None:
 
     mixin.probe_args.probe_type = 'transformer'
     assert not mixin._can_parallelize_probe_runs(full=False)
-    mixin.probe_args.probe_type = 'linear'
+    mixin.probe_args.probe_type = 'mlp'
 
     assert not mixin._can_parallelize_probe_runs(full=True)
 
@@ -1333,7 +1333,7 @@ def test_parallel_trainer_reports_parallel_execution_metadata(monkeypatch) -> No
         data_name='data',
     )
 
-    assert isinstance(model, LinearProbe)
+    assert isinstance(model, MLPProbe)
     assert test_metrics['training_time_seconds'] == pytest.approx(8.0)
     assert test_metrics['parallel_probe_num_runs'] == 2
     assert test_metrics['parallel_probe_seconds_per_run'] == pytest.approx(4.0)
@@ -1481,7 +1481,7 @@ def test_parallel_trainer_chunks_seed_groups_and_aggregates_metadata(monkeypatch
         data_name='data',
     )
 
-    assert isinstance(model, LinearProbe)
+    assert isinstance(model, MLPProbe)
     assert captured['groups'] == [[42, 43], [44, 45], [46]]
     assert captured['output_dirs'][0].endswith('parallel_group_1')
     assert captured['output_dirs'][1].endswith('parallel_group_2')
@@ -1588,8 +1588,8 @@ def test_parallel_trainer_uses_budget_derived_group_size(monkeypatch) -> None:
 
     mixin = _trainer_mixin_for_parallel_tests()
     mixin.trainer_args.num_runs = 5
-    probe = LinearProbe(
-        LinearProbeConfig(
+    probe = MLPProbe(
+        MLPProbeConfig(
             input_size=mixin.probe_args.input_size,
             hidden_size=mixin.probe_args.hidden_size,
             dropout=mixin.probe_args.dropout,
@@ -1694,8 +1694,8 @@ def test_parallel_trainer_uses_estimated_peak_budget_derived_group_size(monkeypa
 
     mixin = _trainer_mixin_for_parallel_tests()
     mixin.trainer_args.num_runs = 5
-    probe = LinearProbe(
-        LinearProbeConfig(
+    probe = MLPProbe(
+        MLPProbeConfig(
             input_size=mixin.probe_args.input_size,
             hidden_size=mixin.probe_args.hidden_size,
             dropout=mixin.probe_args.dropout,
@@ -1827,7 +1827,7 @@ def test_parallel_trainer_saves_exported_best_probe_when_enabled(monkeypatch) ->
         data_name='data',
     )
 
-    assert isinstance(captured['best_model'], LinearProbe)
+    assert isinstance(captured['best_model'], MLPProbe)
     assert captured['test_metrics'] is test_metrics
     assert captured['test_metrics']['parallel_probe_best_seed'] == 42
     assert captured['log_id'] == 'log'

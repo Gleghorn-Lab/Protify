@@ -354,7 +354,7 @@ def test_parallel_probe_preflight_builds_cross_product_plan_report() -> None:
     assert report["groups"][0]["data_name"] == "EC"
     assert report["groups"][0]["embedding_key"] == "ESM2-35/EC/pooled"
     assert report["groups"][0]["dataset_key"] == "EC/default"
-    assert report["groups"][0]["probe_type"] == "linear"
+    assert report["groups"][0]["probe_type"] == "mlp"
     assert report["groups"][0]["input_size"] == 320
     assert report["groups"][0]["hidden_size"] == 64
     assert report["groups"][0]["dropout"] == 0.2
@@ -422,7 +422,7 @@ def test_parallel_probe_preflight_builds_cross_product_plan_report() -> None:
         "--data_names",
         "EC",
         "--probe_type",
-        "linear",
+        "mlp",
         "--hidden_size",
         "64",
         "--dropout",
@@ -448,7 +448,7 @@ def test_parallel_probe_preflight_builds_cross_product_plan_report() -> None:
         "--data_names",
         "EC",
         "--probe_type",
-        "linear",
+        "mlp",
         "--hidden_size",
         "64",
         "--dropout",

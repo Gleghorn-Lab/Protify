@@ -10,7 +10,7 @@ The `model_components` package provides:
 
 - **Attention:** Rotary embeddings, multi-head attention with pluggable backends (flex, sdpa, kernels), and attention-based logits.
 - **Transformer:** A stack of transformer blocks (attention + SwiGLU FFN) used by the transformer probe.
-- **MLP:** SwiGLU and feed-forward helpers used in transformer blocks and in the linear probe (intermediate sizing).
+- **MLP:** SwiGLU and feed-forward helpers used in transformer blocks and in the MLP probe (intermediate sizing).
 
 Probes that use these components:
 
@@ -59,7 +59,7 @@ The **transformer probe** uses `Transformer` as the backbone above embeddings wi
 
 ## mlp.py
 
-- **intermediate_correction_fn(hidden_size, classifier_size):** Returns an intermediate dimension (used for classifier sizing in linear and transformer probes).
+- **intermediate_correction_fn(hidden_size, classifier_size):** Returns an intermediate dimension (used for classifier sizing in the MLP and transformer probes).
 - **SwiGLU:** Swish-gated linear unit module.
 - **swiglu_ln_ffn(hidden_size, expansion_ratio, dropout, use_bias):** LayerNorm + SwiGLU feed-forward used in TransformerBlock.
 

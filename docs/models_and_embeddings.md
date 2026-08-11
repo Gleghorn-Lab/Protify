@@ -118,6 +118,57 @@ The SQL path uses several optimizations to minimize the gap with in-memory dict 
 
 ---
 
+## ESMC sparse autoencoders
+
+A sparse autoencoder (SAE) reads one ESMC hidden state and re-expresses it over a wide codebook in which only `k` features are active per residue. Pooling those activations over the sequence gives one sparse, high-dimensional vector per protein, which is what makes SAE features easy to pool: max pooling asks "did this protein ever express feature j, and how strongly", and needs no learned pooler.
+
+Use them through the model names `ESMC-300-SAE`, `ESMC-600-SAE`, and `ESMC-6B-SAE`:
+
+```bash
+py -m src.protify.main --model_names ESMC-300-SAE --data_names solubility \
+  --probe_type xgboost --embedding_pooling_types max --save_embeddings --sql
+```
+
+### Choosing a checkpoint
+
+A bare alias resolves to the layer at 75% depth, the only layer Biohub publishes across the whole sparsity and width grid, at `k=64` and codebook width 8192. Override with `--sae_layer`, `--sae_k`, and `--sae_codebook_dim`. The resolved name carries the full identity, for example `ESMC-300-SAE-l23-k64-c8192`, and that name is what appears in embedding cache filenames, the results table, and plots. Two variants therefore never share a cache.
+
+Published coverage, from `ESMC_SAE_COVERAGE` in [esmc_sae.py](../src/protify/base_models/esmc_sae.py):
+
+| Backbone | Layers | Depth layer | Grid at the depth layer | Every other layer |
+|----------|--------|-------------|-------------------------|-------------------|
+| ESMC-300 | 0 to 30 | 23 | k in {16, 32, 64, 128, 256, 512} times codebook in {8192, 16384, 32768, 65536, 131072} | k=64, codebook 16384 only |
+| ESMC-600 | 0 to 36 | 27 | same grid | k=64, codebook 16384 only |
+| ESMC-6B | 0 to 80 | 60 | same grid | k=64, codebook 16384 or 131072 |
+
+Asking for a combination Biohub does not publish raises and names the valid options rather than silently substituting one. Layer indices match `--embedding_hidden_state_index`: index `i` is the input to block `i`, and index `n_layers` is the final normalized state.
+
+### Pooling and storage
+
+FastPLMs owns the SAE runtime. `ESMplusplusModel.load_sae_models` attaches the Biohub checkpoint, and a forward pass with `compute_sae=True` returns one sparse COO tensor of shape `(valid_tokens, codebook_dim)` covering the whole batch. Protify reduces that tensor to one vector per protein with a single scatter, dropping the leading and trailing special tokens the way the Biohub reference workflow does.
+
+SAE models accept `max`, `mean`, and `sum` in `--embedding_pooling_types`. Several pooling types concatenate as usual, so `max mean` yields `2 * w` features. Other pooling types, and `--matrix_embed`, raise: a single residue at codebook width 131072 costs 256 KiB dense.
+
+Embeddings go to a coordinate-list blob format when the SAE they came from is sparse enough to pay for it, decided once from the checkpoint by `EsmcSaeForEmbedding.sparse_storage`. Every other model stores dense and pays nothing for the feature.
+
+The deciding quantity is the active fraction `k / codebook_dim`, not either number alone. Per residue exactly `k` of `codebook_dim` features are active whatever the sequence length. Pooling unions those sets across residues, so pooled density does grow with length, and how fast it grows tracks the active fraction. Measured max-pooled density at codebook 16384, from short proteins to past 1200 residues:
+
+| k | active fraction | pooled density | stored |
+|---|---|---|---|
+| 16 | 0.10% | 1.7% to 5.1% | coordinates |
+| 64 | 0.39% | 9.7% to 34.2% | coordinates |
+| 256 | 1.56% | 19.6% to 56.5% | dense |
+
+Only k=256 crosses the roughly 45% break-even. The threshold sits between the k=64 and k=256 active fractions, and independently reproduces the codebook 8192 result at k=64, where the 16208 `gold-ppi` proteins split almost evenly between the formats and dense was the better single choice.
+
+At the widths where coordinates win, they win by a lot: 200 proteins at codebook 65536 stored 3.2 MB against 26.2 MB dense, an eight-fold reduction, with every protein in coordinate form.
+
+### Normalization statistics
+
+Biohub normalizes activations as `(features / max) * idf`. FastPLMs exposes this as `normalize_sae=True` and reads the `max` and `idf` buffers from the checkpoint, defaulting both to ones for shards that never trained them. Protify embeds unnormalized, matching the Biohub reference PPI workflow. Normalization is a per-feature positive rescaling, so it cannot change which features max pooling selects, only their magnitudes; it is not currently exposed as a Protify flag because it would have to reach the embedding cache filename to keep the two variants separable.
+
+---
+
 ## Pooling types
 
 Common values for `embedding_pooling_types` (and probe-side `probe_pooling_types` where applicable):

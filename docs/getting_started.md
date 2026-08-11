@@ -103,11 +103,17 @@ Minimal probe-only run (one model, one dataset, two epochs):
 py -m src.protify.main --model_names ESM2-8 --data_names DeepLoc-2 --num_epochs 2
 ```
 
-Defaults:
+The reference config in `src/protify/yamls/base.yaml` runs the recommended stack instead: ESMC 300M read through its sparse autoencoder, max-pooled, into a gradient-boosted probe.
+
+```bash
+py -m src.protify.main --yaml_path src/protify/yamls/base.yaml --data_names DeepLoc-2
+```
+
+Command-line defaults:
 
 - `--log_dir logs`, `--results_dir results`, `--plots_dir plots`
 - `--embedding_save_dir embeddings`, `--model_save_dir weights`
-- Probe: linear; embeddings: mean pooling; no saving of embeddings unless you set `--save_embeddings`
+- Probe: mlp; embeddings: mean and variance pooling; no saving of embeddings unless you set `--save_embeddings`
 
 Results appear in `results/` (TSV of metrics) and `logs/` (session log). Plots are written to `plots/` after the run.
 

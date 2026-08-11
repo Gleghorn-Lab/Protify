@@ -4,9 +4,22 @@ from typing import List, Optional
 from .supported_models import currently_supported_models, standard_models, experimental_models
 
 
+def _expand_sae_name(name: str, sae_layer: Optional[int], sae_k: Optional[int], sae_codebook_dim: Optional[int]) -> str:
+    """Resolve an ESMC SAE alias to a name that names its checkpoint, leaving others alone.
+
+    The resolved name flows into embedding cache filenames and result tables, so an SAE
+    variant never shares a cache with a different layer, sparsity, or codebook width.
+    """
+    if '-sae' not in name.lower():
+        return name
+
+    from .esmc_sae import resolve_sae_model_name
+    return resolve_sae_model_name(name, sae_layer, sae_k, sae_codebook_dim)
+
+
 @dataclass
 class BaseModelArguments:
-    def __init__(self, model_names: Optional[List[str]] = None, model_paths: Optional[List[str]] = None, model_types: Optional[List[str]] = None, model_dtype: object = None, **kwargs) -> None:
+    def __init__(self, model_names: Optional[List[str]] = None, model_paths: Optional[List[str]] = None, model_types: Optional[List[str]] = None, model_dtype: object = None, sae_layer: Optional[int] = None, sae_k: Optional[int] = None, sae_codebook_dim: Optional[int] = None, **kwargs) -> None:
         if model_paths is not None:
             assert model_types is not None, "model_types is required when model_paths is provided."
             assert len(model_paths) == len(model_types), f"model_paths ({len(model_paths)}) and model_types ({len(model_types)}) must have the same length."
@@ -23,6 +36,9 @@ class BaseModelArguments:
                 self.model_names = model_names
             self._model_types = None
             self._model_paths = None
+            self.model_names = [
+                _expand_sae_name(name, sae_layer, sae_k, sae_codebook_dim) for name in self.model_names
+            ]
         self.model_dtype = model_dtype
 
     def model_entries(self):
@@ -39,10 +55,13 @@ class BaseModelArguments:
                 yield name, name, None
 
 
-def get_base_model(model_name: str, masked_lm: bool = False, dtype=None, model_path: str = None):
+def get_base_model(model_name: str, masked_lm: bool = False, dtype=None, model_path: str = None, pooling_types=None):
     if 'random' in model_name.lower():
         from .random import build_random_model
         return build_random_model(model_name, masked_lm=masked_lm, dtype=dtype, model_path=model_path)
+    elif '-sae' in model_name.lower():
+        from .esmc_sae import build_esmc_sae_model
+        return build_esmc_sae_model(model_name, masked_lm=masked_lm, dtype=dtype, model_path=model_path, pooling_types=pooling_types)
     elif 'esm2' in model_name.lower() and model_name.lower().count('esm2') == 1:
         from .esm2 import build_esm2_model
         return build_esm2_model(model_name, masked_lm=masked_lm, dtype=dtype, model_path=model_path)
@@ -94,7 +113,13 @@ def get_base_model(model_name: str, masked_lm: bool = False, dtype=None, model_p
 
 
 def get_base_model_for_training(model_name: str, tokenwise: bool = False, num_labels: int = None, hybrid: bool = False, dtype=None, model_path: str = None):
-    if 'esm2' in model_name.lower() or 'dsm' in model_name.lower():
+    if '-sae' in model_name.lower():
+        raise ValueError(
+            f"{model_name} reads a frozen sparse autoencoder off ESMC hidden states, so it "
+            f"has no trainable path. Drop --full_finetuning and --hybrid_probe, or train the "
+            f"plain backbone with --model_names {model_name.split('-SAE')[0]}."
+        )
+    elif 'esm2' in model_name.lower() or 'dsm' in model_name.lower():
         from .esm2 import get_esm2_for_training
         return get_esm2_for_training(model_name, tokenwise, num_labels, hybrid, dtype=dtype, model_path=model_path)
     elif 'esmc' in model_name.lower():

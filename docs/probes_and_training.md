@@ -1,12 +1,12 @@
 # Probes and Training
 
-This page documents probe types (linear, transformer, lyra), `ProbeArguments` and `get_probe`, `TrainerArguments` and `TrainerMixin`, and the training flows: probe-only (`run_nn_probes`), full finetuning, hybrid, and scikit. It also covers `num_runs` aggregation and model save/export.
+This page documents probe types (mlp, transformer, lyra, xgboost, lightgbm, random_forest), `ProbeArguments` and `get_probe`, `TrainerArguments` and `TrainerMixin`, and the training flows: probe-only (`run_nn_probes`), full finetuning, hybrid, and scikit. It also covers `num_runs` aggregation and model save/export.
 
 ---
 
 ## Overview
 
-A **probe** is a trainable head on top of (frozen or trainable) base model embeddings. Protify supports three probe types: **linear** (MLP), **transformer**, and **lyra**. Training can be probe-only (default), full base-model finetuning, or hybrid (train probe then finetune base+probe). The scikit path uses precomputed embeddings with sklearn-style models. All probes share a common forward API (embeddings, attention_mask, optional labels) and return loss, logits, and optional hidden_states/attentions.
+A **probe** is a trainable head on top of (frozen or trainable) base model embeddings. Protify supports three neural probe types, **mlp**, **transformer**, and **lyra**, plus the estimator probes **xgboost**, **lightgbm**, and **random_forest**. Training can be probe-only (default), full base-model finetuning, or hybrid (train probe then finetune base+probe). The scikit path uses precomputed embeddings with sklearn-style models. All probes share a common forward API (embeddings, attention_mask, optional labels) and return loss, logits, and optional hidden_states/attentions.
 
 ---
 
@@ -34,11 +34,33 @@ flowchart LR
 
 | Type | Sequence | Token | Description |
 |------|----------|-------|-------------|
-| **linear** | Yes | No | MLP on pooled embeddings. Fastest; good baseline. |
+| **mlp** | Yes | No | Feed-forward stack on pooled embeddings. Fastest neural probe; good baseline. |
 | **transformer** | Yes | Yes | Transformer stack + pooler/classifier. Uses [model_components](model_components.md) Transformer. |
 | **lyra** | Yes | Yes | S4/Lyra probe; no shared model_components. |
+| **xgboost** | Yes | No | Gradient-boosted trees on pooled embeddings. |
+| **lightgbm** | Yes | No | Gradient-boosted trees, leaf-wise growth. |
+| **random_forest** | Yes | No | Bagged trees; no early stopping. |
 
-**When to use:** Linear for speed and baselines; transformer for better accuracy when compute allows; lyra for sequence modeling alternatives. Token-wise is for residue-level tasks (e.g. secondary structure).
+**When to use:** `mlp` for speed and baselines; `transformer` for better accuracy when compute allows; `lyra` for sequence modeling alternatives; `xgboost` and its siblings for sparse features such as max-pooled sparse autoencoder codebooks, where axis-aligned splits read individual features directly. Token-wise is for residue-level tasks (e.g. secondary structure).
+
+`mlp` was called `linear` before it grew hidden layers. `--probe_type linear` still selects it, and saved probe configs, exported repositories, and existing YAML keep working. The serialized `model_type` on `MLPProbeConfig` remains `linear_probe` so published probe repositories still load.
+
+### Estimator probes
+
+`xgboost`, `lightgbm`, and `random_forest` run through `run_estimator_probes` in [main.py](../src/protify/main.py), which shares the embedding cache, results table, plots, and `num_runs` seed aggregation with the neural probes. They differ from the `--use_scikit` path, which searches across many sklearn models; an estimator probe fits one model with the defaults in [estimator_probe.py](../src/protify/probes/estimator_probe.py).
+
+Two behaviors are specific to them:
+
+- **No embedding standardization.** A per-feature shift and scale cannot change which splits a tree can express, and centering would turn a sparse feature matrix dense. `prepare_scikit_dataset(..., standardize=False)` skips it.
+- **Defaults selected on measurement.** The xgboost entry in `ESTIMATOR_DEFAULTS` was chosen by validation MCC over seeds 42 to 44, fitting `ESMC-300-SAE-l23-k64-c8192` max-pooled features on the `solubility` dataset (55536 train rows, 8192 features). It reaches 0.4864 validation MCC where XGBoost's library defaults reach 0.4458, a gap around ten times the 0.0044 seed standard deviation. That selection predates the move to the FastPLMs SAE runtime, whose residue standardization raised the same features from 23.7% to 36.6% non-zero, and the defaults were not reselected afterwards. The gain comes from many low-learning-rate trees under early stopping; sweeping `colsample_bytree` from 0.1 to 1.0 moved validation MCC by under 0.01. The lightgbm and random_forest entries follow the same shape but were not separately measured.
+
+Override any hyperparameter with `--scikit_model_args`, a JSON object:
+
+```bash
+py -m src.protify.main --model_names ESMC-300-SAE --data_names gold-ppi \
+  --probe_type xgboost --embedding_pooling_types max \
+  --scikit_model_args '{"max_depth": 10, "learning_rate": 0.03}'
+```
 
 ---
 
@@ -48,10 +70,10 @@ Defined in [get_probe.py](../src/protify/probes/get_probe.py). Key attributes (C
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `probe_type` | str | linear | linear, transformer, lyra. |
+| `probe_type` | str | mlp | mlp, transformer, lyra, xgboost, lightgbm, random_forest. "linear" is the former name for mlp. |
 | `tokenwise` | bool | False | Token-wise prediction. |
 | `input_size` | int | 960 | Input dimension (set from embedding size). |
-| `hidden_size` | int | 8192 | Hidden size for linear probe MLP. |
+| `hidden_size` | int | 8192 | Hidden size for the MLP probe. |
 | `transformer_hidden_size` | int | 512 | Hidden size for transformer. |
 | `dropout` | float | 0.2 | Dropout. |
 | `num_labels` | int | 2 | Number of classes (set from data). |
@@ -78,7 +100,7 @@ Defined in [get_probe.py](../src/protify/probes/get_probe.py). Key attributes (C
 ## get_probe and rebuild_probe_from_saved_config
 
 - **get_probe(args: ProbeArguments)**
-  Returns a probe instance: `LinearProbe`, `TransformerForSequenceClassification`, `TransformerForTokenClassification`, or the Lyra variants. Config is built from `args.__dict__` (with `hidden_size` overridden by `transformer_hidden_size` for transformer).
+  Returns a probe instance: `MLPProbe`, `TransformerForSequenceClassification`, `TransformerForTokenClassification`, or the Lyra variants. Config is built from `args.__dict__` (with `hidden_size` overridden by `transformer_hidden_size` for transformer).
 
 - **rebuild_probe_from_saved_config(probe_type, tokenwise, probe_config)**
   Rebuilds the same probe classes from a saved config dict (e.g. when loading a packaged model).
@@ -117,7 +139,7 @@ Defined in [trainers.py](../src/protify/probes/trainers.py).
 | `num_workers` | int | 0 | DataLoader workers. |
 | `make_plots` | bool | True | Generate CI plots. |
 | `num_runs` | int | 1 | Number of seeds; aggregate mean and std. |
-| `parallel_probe_runs` | bool | False | For pooled sequence-level linear probes, train `num_runs` seeded probes in one vectorized pass. |
+| `parallel_probe_runs` | bool | False | For pooled sequence-level MLP probes, train `num_runs` seeded probes in one vectorized pass. |
 | `parallel_probe_batch_mode` | str | shared | `shared` reuses each training minibatch across runs; `run_specific` uses deterministic per-run training permutations. |
 | `parallel_probe_index_strategy` | str | permutation | For `run_specific`, `permutation` materializes exact per-run shuffled indices; `affine` uses deterministic memory-free bijections. |
 | `parallel_probe_max_group_size` | int | None | Optional cap on seeded probes per vectorized bank; larger `num_runs` are chunked into multiple parallel Trainer invocations. |
@@ -149,11 +171,11 @@ Calling `trainer_args(probe=True)` or `trainer_args(probe=False)` returns Huggin
 
 When `num_runs > 1`, the trainer runs training `num_runs` times with different seeds, collects metrics (e.g. test loss, spearman), and computes mean and std. The best run (by test loss or selected metric) is used for optional CI plots and reporting. Metrics logged include `*_mean` and `*_std` variants.
 
-Set `parallel_probe_runs=True` (CLI: `--parallel_probe_runs`) to use the vectorized path for pooled, sequence-level linear probes. This builds `ParallelLinearProbe` banks with an explicit run dimension over independently initialized parameters, uses batched matrix multiplication across runs, shares each minibatch across runs by default, sums per-run losses during training to preserve each run's gradient scale, averages per-run loss for evaluation/early stopping, aggregates metrics across all seeds, and exports the best run back to a normal `LinearProbe`. Matrix/tokenwise probes, transformer probes, Lyra probes, and full fine-tuning continue to use the sequential path.
+Set `parallel_probe_runs=True` (CLI: `--parallel_probe_runs`) to use the vectorized path for pooled, sequence-level MLP probes. This builds `ParallelLinearProbe` banks with an explicit run dimension over independently initialized parameters, uses batched matrix multiplication across runs, shares each minibatch across runs by default, sums per-run losses during training to preserve each run's gradient scale, averages per-run loss for evaluation/early stopping, aggregates metrics across all seeds, and exports the best run back to a normal `MLPProbe`. Matrix/tokenwise probes, transformer probes, Lyra probes, and full fine-tuning continue to use the sequential path.
 
 During HuggingFace validation evaluation, the parallel path also emits per-run metric keys such as `eval_run_0_loss`, `eval_run_0_accuracy`, and `eval_run_1_loss` through `compute_metrics`. Early stopping and checkpoint selection still use the aggregate bank-level `eval_loss`, so these per-run keys are observability and parity checks rather than independent checkpoint selectors. The explicit post-training valid/test prediction pass computes `parallel_probe_valid_run_metrics` and `parallel_probe_test_run_metrics` itself and disables redundant HuggingFace `compute_metrics` during `predict`.
 
-The planning layer in [parallel_probe_plan.py](../src/protify/probes/parallel_probe_plan.py) represents each candidate run as a `ParallelProbeRunSpec` and groups only runs with matching model, dataset, embedding cache, trainer settings, batch mode, and linear probe architecture. `ParallelProbeExecutionPlan` summarizes a larger model universe / dataset universe / probe universe sweep, including vectorized groups, sequential fallbacks, trainer invocation reduction, and a largest-parallel-first execution order. `estimate_parallel_probe_plan()` adds static trainable-state estimates: linear-probe parameter bytes, gradient bytes, and AdamW moment bytes for each vectorized bank. When a caller provides planned batch and dataset sizes, it also estimates per-batch activation/logit bytes and materialized run-specific permutation-index bytes. The Trainer executes the compatible seed groups for one model/dataset pair; `parallel_probe_max_group_size` can split a large seed set into multiple vectorized banks so workstation runs can sweep the utilization and memory tradeoff without returning to fully sequential training. `parallel_probe_training_state_budget_gb` derives this group-size cap automatically from trainable state only; `parallel_probe_estimated_peak_budget_gb` includes trainable state, batch activations, and materialized run-specific index bytes. If multiple caps are set, the smallest cap is used.
+The planning layer in [parallel_probe_plan.py](../src/protify/probes/parallel_probe_plan.py) represents each candidate run as a `ParallelProbeRunSpec` and groups only runs with matching model, dataset, embedding cache, trainer settings, batch mode, and MLP probe architecture. `ParallelProbeExecutionPlan` summarizes a larger model universe / dataset universe / probe universe sweep, including vectorized groups, sequential fallbacks, trainer invocation reduction, and a largest-parallel-first execution order. `estimate_parallel_probe_plan()` adds static trainable-state estimates: MLP probe parameter bytes, gradient bytes, and AdamW moment bytes for each vectorized bank. When a caller provides planned batch and dataset sizes, it also estimates per-batch activation/logit bytes and materialized run-specific permutation-index bytes. The Trainer executes the compatible seed groups for one model/dataset pair; `parallel_probe_max_group_size` can split a large seed set into multiple vectorized banks so workstation runs can sweep the utilization and memory tradeoff without returning to fully sequential training. `parallel_probe_training_state_budget_gb` derives this group-size cap automatically from trainable state only; `parallel_probe_estimated_peak_budget_gb` includes trainable state, batch activations, and materialized run-specific index bytes. If multiple caps are set, the smallest cap is used.
 
 Use `parallel_probe_batch_mode='shared'` for the highest reuse: every run sees the same minibatch order while keeping independent weights and losses. Use `parallel_probe_batch_mode='run_specific'` to wrap the training dataset with [ParallelRunDataset](../src/protify/probes/parallel_probe_batches.py), which feeds run-specific pooled batches shaped `[batch, runs, dim]` with labels shaped `[batch, runs]` or `[batch, runs, labels]`. Validation and test batches remain shared across runs so per-run metrics compare on the same examples. The `run_specific` mode is limited to pooled non-PPI embedding datasets. Its default `parallel_probe_index_strategy='permutation'` materializes exact per-run shuffled indices as compact tensors; `parallel_probe_index_strategy='affine'` uses deterministic memory-free bijections for very large corpora where storing one permutation per run would be too expensive. When the base dataset exposes in-memory pooled embeddings or a two-tensor `TensorDataset`, `ParallelRunDataset` builds a tensor cache and uses vectorized `index_select` instead of calling the base dataset once per seed per sample. This is the recommended path for pre-embedded probe sweeps.
 
@@ -325,7 +347,7 @@ Production export uses the same probe rebuild API so that the packaged artifact 
 ### Linear probe (default)
 
 ```bash
-py -m src.protify.main --model_names ESM2-8 --data_names DeepLoc-2 --probe_type linear
+py -m src.protify.main --model_names ESM2-8 --data_names DeepLoc-2 --probe_type mlp
 ```
 
 ### Transformer probe with more layers

@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from base_models.get_base_models import BaseModelArguments, standard_models
 from data.supported_datasets import supported_datasets, standard_data_benchmark, internal_datasets
 from embedder import EmbeddingArguments
+from probes.estimator_probe import is_estimator_probe
 from probes.get_probe import ProbeArguments
 from probes.trainers import TrainerArguments
 from main import MainProcess
@@ -457,14 +458,14 @@ class GUI(MainProcess):
     def build_probe_tab(self):
         # Probe Type
         ttk.Label(self.probe_tab, text="Probe Type:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
-        self.settings_vars["probe_type"] = tk.StringVar(value="linear")
+        self.settings_vars["probe_type"] = tk.StringVar(value="mlp")
         combo_probe = ttk.Combobox(
             self.probe_tab,
             textvariable=self.settings_vars["probe_type"],
-            values=["linear", "transformer", "lyra"]
+            values=["mlp", "transformer", "lyra", "xgboost", "lightgbm", "random_forest"]
         )
         combo_probe.grid(row=0, column=1, padx=10, pady=5)
-        self.add_help_button(self.probe_tab, 0, 2, "Type of probe architecture to use (linear, transformer, or lyra).")
+        self.add_help_button(self.probe_tab, 0, 2, "Probe to train on the embeddings: mlp, transformer, lyra, xgboost, lightgbm, or random_forest.")
 
         # Tokenwise
         ttk.Label(self.probe_tab, text="Tokenwise:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
@@ -648,7 +649,7 @@ class GUI(MainProcess):
         self.settings_vars["hybrid_probe"] = tk.BooleanVar(value=False)
         check_hybrid_probe = ttk.Checkbutton(self.trainer_tab, variable=self.settings_vars["hybrid_probe"])
         check_hybrid_probe.grid(row=0, column=1, padx=10, pady=5, sticky="w")
-        self.add_help_button(self.trainer_tab, 0, 2, "Whether to use hybrid probe (combines neural and linear probes).")
+        self.add_help_button(self.trainer_tab, 0, 2, "Whether to use hybrid probe (trains the base model together with the probe).")
 
         # Full finetuning checkbox
         ttk.Label(self.trainer_tab, text="Full Finetuning:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
@@ -1237,6 +1238,10 @@ class GUI(MainProcess):
             "embed_dtype": self.settings_vars["embed_dtype"].get(),
             "sql": self.settings_vars["sql"].get(),
             "probe_type": self.settings_vars["probe_type"].get(),
+            "probe_n_jobs": -1,
+            "sae_layer": None,
+            "sae_k": None,
+            "sae_codebook_dim": None,
             "tokenwise": self.settings_vars["tokenwise"].get(),
             "hidden_size": self.settings_vars["hidden_size"].get(),
 
@@ -1558,6 +1563,7 @@ class GUI(MainProcess):
         
         # Gather settings from variables
         self.full_args.probe_type = self.settings_vars["probe_type"].get()
+        self.full_args.probe_n_jobs = getattr(self.full_args, "probe_n_jobs", -1)
         self.full_args.tokenwise = self.settings_vars["tokenwise"].get()
         self.full_args.pre_ln = self.settings_vars["pre_ln"].get()
         self.full_args.n_layers = self.settings_vars["n_layers"].get()
@@ -1655,6 +1661,8 @@ class GUI(MainProcess):
                 self.run_full_finetuning()
             elif self.full_args.hybrid_probe:
                 self.run_hybrid_probes()
+            elif is_estimator_probe(self.full_args.probe_type):
+                self.run_estimator_probes()
             else:
                 self.run_nn_probes()
             print_done()

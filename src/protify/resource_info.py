@@ -67,6 +67,24 @@ model_descriptions = {
         'type': 'Protein language model',
         'citation': 'N/A'
     },
+    'ESMC-300-SAE': {
+        'description': 'ESMC 300M read through a Biohub sparse autoencoder, giving sparse codebook features per residue. Defaults to layer 23, k 64, codebook 8192.',
+        'size': '300M parameters plus the sparse autoencoder codebook',
+        'type': 'Protein language model sparse autoencoder',
+        'citation': 'biohub/ESMC-SAE-Overview'
+    },
+    'ESMC-600-SAE': {
+        'description': 'ESMC 600M read through a Biohub sparse autoencoder. Defaults to layer 27, k 64, codebook 8192.',
+        'size': '600M parameters plus the sparse autoencoder codebook',
+        'type': 'Protein language model sparse autoencoder',
+        'citation': 'biohub/ESMC-SAE-Overview'
+    },
+    'ESMC-6B-SAE': {
+        'description': 'ESMC 6B read through a Biohub sparse autoencoder. Defaults to layer 60, k 64, codebook 8192.',
+        'size': '6.352B parameters plus the sparse autoencoder codebook',
+        'type': 'Protein language model sparse autoencoder',
+        'citation': 'biohub/ESMC-SAE-Overview'
+    },
     'ProtBert': {
         'description': 'BERT-based protein language model trained on protein sequences from UniRef.',
         'size': '420M parameters',

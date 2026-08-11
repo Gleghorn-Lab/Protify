@@ -13,7 +13,7 @@ When `--use_wandb_hyperopt` is set, the pipeline runs a W&B sweep over the param
 ## How it works
 
 1. **Sweep config** is loaded from `full_args.sweep_config_path` (default `yamls/sweep.yaml`). Required: `parameters` (W&B format). Optional: `early_terminate` (e.g. hyperband).
-2. Parameters are filtered by probe type and LoRA: only keys in `linear_probe_params` or `transformer_probe_params` (and optionally `lora_params`) are passed to the sweep; the rest are ignored for that run.
+2. Parameters are filtered by probe type and LoRA: only keys in `mlp_probe_params` or `transformer_probe_params` (and optionally `lora_params`) are passed to the sweep; the rest are ignored for that run.
 3. For each (model_name, data_name), embeddings are loaded, `num_labels` and `task_type` are set, and a **HyperoptModule** is created with the sweep config and a shared `results_list`.
 4. **W&B sweep** is created: `wandb.sweep(sweep, project, entity)` then `wandb.agent(sweep_id, function=hyperopt_module.objective, count=sweep_count)`.
 5. **HyperoptModule.objective()** is the W&B trial entry: `wandb.init(project, entity, config=sweep_config, reinit=True)`; `apply_config(wandb.config)`; optionally reload embeddings if `embedding_pooling_types` or `embedding_hidden_state_index` changed; `train_model(sweep_mode=True)`; select metric via `sweep_metric_cls` or `sweep_metric_reg` by task_type; log metrics to W&B; append to results_list; return metric value.
@@ -46,7 +46,7 @@ File: [src/protify/yamls/sweep.yaml](../src/protify/yamls/sweep.yaml).
   - LoRA: `lora_r`, `lora_alpha`, `lora_dropout`.
   - Trainer: `num_epochs`, `probe_batch_size`, `base_batch_size`, `probe_grad_accum`, `base_grad_accum`, `patience`, `seed`.
 
-Only parameters that are in the allowed sets (linear_probe_params, transformer_probe_params, lora_params, trainer_keys, embedding_keys) are applied; the rest are ignored for that probe type.
+Only parameters that are in the allowed sets (mlp_probe_params, transformer_probe_params, lora_params, trainer_keys, embedding_keys) are applied; the rest are ignored for that probe type.
 
 Example hidden-state sweep entry:
 

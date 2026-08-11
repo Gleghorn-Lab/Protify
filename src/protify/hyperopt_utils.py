@@ -285,24 +285,24 @@ class HyperoptModule:
         params_to_hyperopt = sweep_config.get("parameters", {})
         
         # Filter parameters based on probe type and LoRA settings
-        probe_type = getattr(mp.probe_args, 'probe_type', 'linear')
+        probe_type = getattr(mp.probe_args, 'probe_type', 'mlp')
         use_lora = getattr(mp.probe_args, 'lora', False)
         
         # Define which parameters are relevant for each probe type
-        linear_probe_params = {'lr', 'weight_decay', 'hidden_size', 'n_layers', 'dropout', 'pre_ln', 'use_bias', 'probe_batch_size', 'embedding_hidden_state_index'}
+        mlp_probe_params = {'lr', 'weight_decay', 'hidden_size', 'n_layers', 'dropout', 'pre_ln', 'use_bias', 'probe_batch_size', 'embedding_hidden_state_index'}
         transformer_probe_params = {'lr', 'weight_decay', 'hidden_size', 'n_layers', 'transformer_dropout', 'pre_ln',
                                      'classifier_dropout', 'classifier_size', 'use_bias', 'probe_pooling_types', 'embedding_pooling_types', 'probe_batch_size',
                                      'embedding_hidden_state_index', 'bom_k', 'head_size', 'probe_grad_accum', 'add_token_ids', 'random_pair_flipping'}
         lora_params = {'lora_r', 'lora_alpha', 'lora_dropout'}
         
         # Determine which parameters to include
-        if probe_type == 'linear':
-            relevant_params = linear_probe_params
+        if probe_type == 'mlp':
+            relevant_params = mlp_probe_params
         elif probe_type == 'transformer':
             relevant_params = transformer_probe_params
         else:
             # For other probe types, include all common params
-            relevant_params = linear_probe_params | transformer_probe_params
+            relevant_params = mlp_probe_params | transformer_probe_params
         
         # Add LoRA parameters only if LoRA is enabled
         if use_lora:

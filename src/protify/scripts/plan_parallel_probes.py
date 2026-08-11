@@ -23,6 +23,7 @@ try:
         plan_parallel_probe_runs,
         schedule_parallel_probe_execution_waves,
     )
+    from probes.get_probe import normalize_probe_type
 except ImportError:
     from protify.probes.parallel_probe_plan import (
         ParallelProbeCompatibilityKey,
@@ -43,6 +44,7 @@ except ImportError:
         plan_parallel_probe_runs,
         schedule_parallel_probe_execution_waves,
     )
+    from protify.probes.get_probe import normalize_probe_type
 
 
 GroupSizeCaps = dict[ParallelProbeCompatibilityKey, int]
@@ -78,7 +80,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         choices=["singlelabel", "multilabel", "regression", "sigmoid_regression"],
         default="singlelabel",
     )
-    parser.add_argument("--probe_type", choices=["linear", "transformer", "lyra"], default="linear")
+    parser.add_argument("--probe_type", choices=["mlp", "linear", "transformer", "lyra"], default="mlp")
     parser.add_argument("--no_pre_ln", dest="pre_ln", action="store_false", default=True)
     parser.add_argument("--use_bias", action="store_true")
     parser.add_argument("--tokenwise", action="store_true")
@@ -125,6 +127,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def validate_args(args: argparse.Namespace) -> argparse.Namespace:
+    # Normalize before anything derives a key from it, so a plan built with the former
+    # probe name matches one built with the current name.
+    args.probe_type = normalize_probe_type(args.probe_type)
     assert len(args.model_names) > 0, "At least one model name is required."
     assert len(args.data_names) > 0, "At least one dataset name is required."
     assert args.num_runs > 0, "num_runs must be positive."
@@ -209,7 +214,7 @@ def probe_config_parameter_count(
     args: argparse.Namespace,
     probe_config: ProbePlanConfig,
 ) -> int:
-    if args.probe_type != "linear":
+    if args.probe_type not in ("mlp", "linear"):
         return 0
     return linear_probe_parameter_count(
         input_size=args.input_size,
@@ -227,7 +232,7 @@ def probe_config_recommendation(
 ) -> dict[str, object]:
     parameter_count = probe_config_parameter_count(args, probe_config)
     bytes_per_run = parameter_count * args.dtype_bytes * (2 + args.optimizer_state_multiplier)
-    if args.probe_type == "linear":
+    if args.probe_type in ("mlp", "linear"):
         batch_activation_count = linear_probe_batch_activation_count(
             input_size=args.input_size,
             hidden_size=probe_config.hidden_size,
@@ -295,7 +300,7 @@ def probe_config_recommendation(
         "hidden_size": probe_config.hidden_size,
         "dropout": probe_config.dropout,
         "n_layers": probe_config.n_layers,
-        "parameter_count_known": args.probe_type == "linear",
+        "parameter_count_known": args.probe_type in ("mlp", "linear"),
         "single_probe_parameter_count": parameter_count,
         "training_state_bytes_per_run": bytes_per_run,
         "batch_activation_bytes_per_run": batch_activation_bytes_per_run,

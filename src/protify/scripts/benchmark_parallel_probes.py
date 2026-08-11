@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from torch.utils.data import DataLoader, TensorDataset
 
 try:
-    from probes.linear_probe import LinearProbe, LinearProbeConfig
+    from probes.mlp_probe import MLPProbe, MLPProbeConfig
     from probes.parallel_linear_probe import ParallelLinearProbe, ParallelLinearProbeConfig
     from probes.parallel_probe_batches import ParallelRunDataset
     from probes.parallel_probe_plan import (
@@ -16,7 +16,7 @@ try:
         plan_parallel_probe_runs,
     )
 except ImportError:
-    from protify.probes.linear_probe import LinearProbe, LinearProbeConfig
+    from protify.probes.mlp_probe import MLPProbe, MLPProbeConfig
     from protify.probes.parallel_linear_probe import ParallelLinearProbe, ParallelLinearProbeConfig
     from protify.probes.parallel_probe_batches import ParallelRunDataset
     from protify.probes.parallel_probe_plan import (
@@ -139,7 +139,7 @@ def build_synthetic_plan(args: argparse.Namespace) -> ParallelProbeExecutionPlan
         embedding_key=f"synthetic:{args.num_samples}:{args.input_size}:{args.task_type}",
         dataset_key=f"synthetic:{args.num_samples}:{args.num_labels}",
         trainer_key=parallel_probe_trainer_key(args),
-        probe_type="linear",
+        probe_type="mlp",
         input_size=args.input_size,
         hidden_size=args.hidden_size,
         dropout=args.dropout,
@@ -324,7 +324,7 @@ def train_sequential(
         run_seed = args.seed + run_idx
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(run_seed)
-            config = LinearProbeConfig(
+            config = MLPProbeConfig(
                 input_size=args.input_size,
                 hidden_size=args.hidden_size,
                 dropout=args.dropout,
@@ -334,7 +334,7 @@ def train_sequential(
                 pre_ln=True,
                 use_bias=True,
             )
-            model = LinearProbe(config).to(device)
+            model = MLPProbe(config).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         loader = make_loader(dataset, args.batch_size, run_seed)
         model.train()

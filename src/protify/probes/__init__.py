@@ -1,6 +1,6 @@
 """Public probe classes and parallel-probe planning helpers."""
 
-from .linear_probe import LinearProbe, LinearProbeConfig
+from .mlp_probe import MLPProbe, MLPProbeConfig
 from .parallel_probe_batches import ParallelRunDataset
 from .parallel_linear_probe import (
     ParallelLinearProbe,
@@ -36,8 +36,8 @@ from .transformer_probe import (
 from .packaged_probe_model import PackagedProbeConfig, PackagedProbeModel
 
 __all__ = [
-    "LinearProbe",
-    "LinearProbeConfig",
+    "MLPProbe",
+    "MLPProbeConfig",
     "ParallelRunDataset",
     "ParallelLinearProbe",
     "ParallelLinearProbeConfig",

@@ -15,7 +15,16 @@ This is the standalone Synthyra Protify checkout. Keep its public training, eval
 - CLI, YAML, GUI, and cloud dispatch share the same `MainProcess` pipeline.
 - Keep heavy model and dataset loading lazy where the registries and factories are lazy.
 - `src/protify/fastplms/` is a vendored repository with its own guidance. Do not mix FastPLMs changes into a Protify task.
-- `--parallel_probe_runs` applies only to compatible pooled, sequence-level linear probes. Matrix or tokenwise probes, transformer probes, Lyra probes, PPI run-specific datasets, and full fine-tuning use the sequential fallback.
+- `--parallel_probe_runs` applies only to compatible pooled, sequence-level MLP probes. Matrix or tokenwise probes, transformer probes, Lyra probes, PPI run-specific datasets, and full fine-tuning use the sequential fallback.
+- A resolved model name carries everything that changes its embeddings. ESMC sparse autoencoder aliases expand to names such as `ESMC-300-SAE-l23-k64-c8192`, so the layer, sparsity, and codebook width reach the embedding cache filename and the results table without any separate cache key.
+- FastPLMs owns the sparse autoencoder runtime, through `ESMplusplusModel.load_sae_models` and `compute_sae=True`, which returns one sparse `(valid_tokens, codebook_dim)` tensor per attached layer. `src/protify/base_models/esmc_sae.py` owns only what is Protify's: the published-coverage registry, model-name resolution, pooling to one vector per protein, and the storage policy. Do not reimplement the SAE encoder here.
+- SAE models return one vector per sequence. They accept `max`, `mean`, and `sum` only, and reject `--matrix_embed`, because the dense per-residue codebook tensor does not fit the cache. Pooling drops the leading and trailing special tokens, matching the Biohub reference workflow.
+- Pair datasets swap protein A and B only on the training split, and only under `--random_pair_flipping`. Swapping a validation or test pair would make a reported score depend on the random state.
+- Coordinate-list blob storage is selected by the model, through `EsmcSaeForEmbedding.sparse_storage`, not per embedding. Every other model writes dense and pays nothing for the feature. bfloat16 keeps its own bit pattern under dtype code 3; code 1 is the older float16-byte encoding and is read but never written.
+- `probe_type` is normalized once in `ProbeArguments` and `ParallelProbeRunSpec`. `mlp` is the current name; `linear` is accepted because saved probe configs, exported repositories, and existing YAML carry it, and `MLPProbeConfig.model_type` stays `linear_probe`.
+- Estimator probes (`xgboost`, `lightgbm`, `random_forest`) run through `run_estimator_probes`, share the embedding cache and results table with the neural probes, and skip embedding standardization because it cannot change a tree's splits and would densify sparse features.
+- The shared metric functions read their input as raw logits, because neural probes produce logits: the single-label one softmaxes and the multi-label one sigmoids before thresholding at 0.5. `estimator_probe._predictions` therefore returns log probabilities and log odds, never the probabilities `predict_proba` gives back.
+- Matrix embeddings are cached with the leading and trailing special tokens, so a stored per-residue embedding has `len(seq) + 2` rows. Nothing may reshape one against `len(seq)`.
 
 ## Python Coding Standard
 

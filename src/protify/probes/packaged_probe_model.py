@@ -16,7 +16,7 @@ class PackagedProbeConfig(PretrainedConfig):
     def __init__(
         self,
         base_model_name: str = "",
-        probe_type: str = "linear",
+        probe_type: str = "mlp",
         probe_config: dict[str, Any] | None = None,
         tokenwise: bool = False,
         matrix_embed: bool = False,
@@ -219,7 +219,8 @@ class PackagedProbeModel(PreTrainedModel):
             attentions=attentions,
         )  # (b, d_probe) or (b, l, d); mask is (b, l) or None
 
-        if self.config.probe_type == "linear":
+        # Exported repositories predating the rename still carry "linear".
+        if self.config.probe_type in ("mlp", "linear"):
             probe_output = self.probe(embeddings=probe_embeddings, labels=labels)
             return probe_output  # logits: (b, c)
 
