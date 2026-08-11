@@ -11,8 +11,13 @@ import numpy as np
 
 torch_load = partial(torch.load, map_location='cpu', weights_only=True)
 
-# Compact blob serialization constants
-# Canonical source: core/embed/blob.py. Keep in sync with fastplms/embedding_mixin.py.
+# Compact blob serialization constants. Canonical source: core/embed/blob.py.
+#
+# FastPLMs reads Protify caches through `_decode_legacy_sqlite_blob` in
+# fastplms/embeddings/storage.py, which currently accepts version 0x01 with dtype codes 0
+# to 2 only. Dtype code 3 and the coordinate-list version 0x02 below are both newer than
+# that reader, so a cache written here since they landed does not import there until
+# FastPLMs gains them. Adding them is a change to the vendored repository, not to Protify.
 _COMPACT_VERSION = 0x01
 # Code 1 is the original bfloat16 encoding, which converted to float16 bytes. bfloat16
 # carries a wider exponent than float16, so that conversion silently flushed values below

@@ -119,9 +119,34 @@ def test_var_no_mask(emb: torch.Tensor) -> None:
     # emb: (b, l, d)
     pooler = Pooler(['var'])
     pooled = pooler.var_pooling(emb)  # (b, d)
-    expected = emb.var(dim=1)  # (b, d)
+    expected = emb.var(dim=1, unbiased=False)  # (b, d)
     assert pooled.shape == (batch_size, hidden_size)
     assert torch.allclose(pooled, expected)
+
+
+def test_var_pooling_agrees_with_and_without_a_mask(emb: torch.Tensor) -> None:
+    # emb: (b, l, d). A full mask must give the same answer as no mask at all, which
+    # needs both branches to use the population variance.
+    pooler = Pooler(['var'])
+    full_mask = torch.ones(emb.shape[0], emb.shape[1])  # (b, l)
+
+    assert torch.allclose(
+        pooler(emb),  # (b, d)
+        pooler(emb, attention_mask=full_mask),  # (b, d)
+        atol=1e-5,
+    )
+
+
+def test_std_equals_sqrt_var_without_a_mask(emb: torch.Tensor) -> None:
+    # emb: (b, l, d). PackagedProbeModel pools with no mask, so the unmasked branches of
+    # std and var have to agree the same way the masked ones do.
+    pooler = Pooler(['std'])
+
+    assert torch.allclose(
+        pooler.std_pooling(emb),  # (b, d)
+        torch.sqrt(pooler.var_pooling(emb)),  # (b, d)
+        atol=1e-6,
+    )
 
 
 def test_var_with_mask(emb: torch.Tensor, mask: torch.Tensor) -> None:

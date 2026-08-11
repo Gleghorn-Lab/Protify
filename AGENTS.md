@@ -23,6 +23,8 @@ This is the standalone Synthyra Protify checkout. Keep its public training, eval
 - Coordinate-list blob storage is selected by the model, through `EsmcSaeForEmbedding.sparse_storage`, not per embedding. Every other model writes dense and pays nothing for the feature. bfloat16 keeps its own bit pattern under dtype code 3; code 1 is the older float16-byte encoding and is read but never written.
 - `probe_type` is normalized once in `ProbeArguments` and `ParallelProbeRunSpec`. `mlp` is the current name; `linear` is accepted because saved probe configs, exported repositories, and existing YAML carry it, and `MLPProbeConfig.model_type` stays `linear_probe`.
 - Estimator probes (`xgboost`, `lightgbm`, `random_forest`) run through `run_estimator_probes`, share the embedding cache and results table with the neural probes, and skip embedding standardization because it cannot change a tree's splits and would densify sparse features.
+- The shared metric functions read their input as raw logits, because neural probes produce logits: the single-label one softmaxes and the multi-label one sigmoids before thresholding at 0.5. `estimator_probe._predictions` therefore returns log probabilities and log odds, never the probabilities `predict_proba` gives back.
+- Matrix embeddings are cached with the leading and trailing special tokens, so a stored per-residue embedding has `len(seq) + 2` rows. Nothing may reshape one against `len(seq)`.
 
 ## Python Coding Standard
 

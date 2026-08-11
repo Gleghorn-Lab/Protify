@@ -173,22 +173,56 @@ def _fit(
     return estimator
 
 
+# Keeps the log transforms below finite when an estimator returns a saturated probability.
+_PROBABILITY_EPSILON = 1e-7
+
+
+def _positive_probability(block: np.ndarray, classes: np.ndarray) -> np.ndarray:
+    """P(label = 1) from one label's predict_proba block.
+
+    `num_labels` counts the labels present across train, valid, and test, so a label the
+    training split never varies still gets a column here. Its fitted estimator saw one
+    class and can only ever predict that class, whatever width its block comes back at:
+    scikit-learn returns (n, 1) there while XGBoost and LightGBM still return (n, 2).
+    """
+    # block: (n, u); classes: (u',) values this label took in the training split
+    if classes.size == 1:
+        return np.full(block.shape[0], float(classes[0] == 1))  # (n,)
+
+    return block[:, np.flatnonzero(classes == 1)[0]].astype(np.float64)  # (n,)
+
+
 def _predictions(estimator: Any, X: np.ndarray, task_type: str) -> np.ndarray:
-    """Scores in the layout the shared metric functions expect."""
+    """Scores in the layout the shared metric functions expect.
+
+    Those functions were written for neural probes, so they read their input as raw logits:
+    the single-label one softmaxes before computing AUC, and the multi-label one sigmoids
+    before thresholding at 0.5. Passing probabilities straight through would squash them a
+    second time, which pushes every non-zero multi-label score above the threshold. Log
+    probabilities and log odds invert each squash exactly, since softmax(log p) = p once the
+    row sums to one, and sigmoid(log(p / (1 - p))) = p.
+    """
     # X: (n, d)
     if task_type in REGRESSION_TASK_TYPES:
         return estimator.predict(X)  # (n,)
 
     if task_type == "multilabel":
-        # MultiOutputClassifier yields one (n, 2) array per label.
+        # One block per label, and one class vector per label alongside it. MultiOutputClassifier
+        # and a natively multi-output RandomForestClassifier both lay `classes_` out that way.
         per_label = estimator.predict_proba(X)
-        return np.stack([column[:, 1] for column in per_label], axis=1)  # (n, c)
+        probabilities = np.stack(
+            [_positive_probability(block, classes)
+             for block, classes in zip(per_label, estimator.classes_)],
+            axis=1,
+        )  # (n, c)
+        probabilities = np.clip(probabilities, _PROBABILITY_EPSILON, 1.0 - _PROBABILITY_EPSILON)
+        return np.log(probabilities / (1.0 - probabilities))  # (n, c)
 
     probabilities = estimator.predict_proba(X)  # (n, c)
     if probabilities.shape[1] == 1:
         probabilities = np.concatenate([1.0 - probabilities, probabilities], axis=1)  # (n, 2)
 
-    return probabilities  # (n, c)
+    return np.log(np.clip(probabilities, _PROBABILITY_EPSILON, None))  # (n, c)
 
 
 def _metric_function(task_type: str) -> Callable[[Any], dict[str, float]]:

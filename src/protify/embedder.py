@@ -335,11 +335,14 @@ class Embedder:
         os.makedirs(self.embedding_save_dir, exist_ok=True)
         model = embedding_model.to(self.device).eval()
         sparse_storage = getattr(model, "sparse_storage", False)
+        # SAE models reduce inside the encoder and return (b, p * c), so a Pooler here would
+        # never be called, and would reject the names only they accept, such as 'sum'.
+        pools_internally = getattr(model, "pools_internally", False)
         dynamic = self.padding == 'longest'
         model = maybe_compile(model, dynamic=dynamic)
         device = self.device
         collate_fn = build_collator(tokenizer, padding=self.padding, max_length=self.max_length)
-        if self.matrix_embed:
+        if self.matrix_embed or pools_internally:
             pooler = None
         else:
             print_message(f'Pooling types: {self.pooling_types}')
@@ -476,11 +479,12 @@ class Embedder:
             )
             model_obj = model_obj.to(device).eval()
             sparse_storage = getattr(model_obj, "sparse_storage", False)
+            pools_internally = getattr(model_obj, "pools_internally", False)
             dynamic = self.padding == 'longest'
             model_obj = maybe_compile(model_obj, dynamic=dynamic)
             collate_fn = build_collator(tokenizer, padding=self.padding, max_length=self.max_length)
 
-            if self.matrix_embed:
+            if self.matrix_embed or pools_internally:
                 pooler = None
             else:
                 pooler = Pooler(self.pooling_types)

@@ -204,6 +204,11 @@ class EsmcSaeForEmbedding(nn.Module):
     per-residue activation tensor is too large to store at these widths.
     """
 
+    # Reduction happens in forward, over the sparse feature tensor. Embedder reads this to
+    # skip building a Pooler, whose names are validated against dense (b, l, d) activations
+    # and so overlap SAE_POOLING_TYPES without matching it.
+    pools_internally = True
+
     def __init__(
         self,
         model_path: str,

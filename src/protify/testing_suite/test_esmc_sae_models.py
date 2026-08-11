@@ -129,6 +129,21 @@ def test_model_arguments_keep_the_resolved_name_in_entries() -> None:
     assert entries == [("ESMC-600-SAE-l27-k64-c8192", "ESMC-600-SAE-l27-k64-c8192", None)]
 
 
+def test_sae_models_pool_inside_the_encoder() -> None:
+    # Embedder reads `pools_internally` to skip building a Pooler over SAE outputs. That is
+    # what lets 'sum' through: the generic Pooler owns a different name set and would reject
+    # it before any embedding runs.
+    try:
+        from src.protify.base_models.esmc_sae import SAE_POOLING_TYPES, EsmcSaeForEmbedding
+        from src.protify.pooler import Pooler
+    except ImportError:
+        from protify.base_models.esmc_sae import SAE_POOLING_TYPES, EsmcSaeForEmbedding
+        from protify.pooler import Pooler
+
+    assert EsmcSaeForEmbedding.pools_internally
+    assert set(SAE_POOLING_TYPES) - set(Pooler(['mean']).pooling_options) == {'sum'}
+
+
 def test_estimator_probe_types_are_recognized() -> None:
     for probe_type in ESTIMATOR_PROBE_TYPES:
         assert is_estimator_probe(probe_type)

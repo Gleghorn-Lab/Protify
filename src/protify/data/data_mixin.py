@@ -61,15 +61,17 @@ def _to_numpy(embedding: torch.Tensor) -> np.ndarray:
     return embedding.numpy()
 
 
-def _as_rows(embedding: np.ndarray, seq: str, full: bool) -> np.ndarray:
-    """Reshape one embedding into rows so concatenation yields an (n, d) matrix.
+def _as_row(embedding: np.ndarray, full: bool) -> np.ndarray:
+    """Reduce one cached embedding to a single row, so concatenation yields (n, d).
 
-    The SQL backend returns a pooled vector at its stored rank, (d,), while the PTH
-    backend already returns (1, d). Normalizing here keeps both paths building the same
-    matrix.
+    The SQL backend returns a pooled vector at its stored rank, (d,), while the PTH backend
+    already returns (1, d). Matrix caches instead hold (l, d) per residue, where l counts
+    the stored tokens including the leading and trailing special tokens, so l is len(seq)+2
+    rather than len(seq). These learners take one vector per sequence, so a matrix averages
+    over its own rows rather than being reshaped against the sequence length.
     """
     # embedding: (d,) or (1, d) pooled, or (l, d) per-residue
-    return embedding.reshape(len(seq), -1) if full else embedding.reshape(1, -1)
+    return embedding.mean(axis=0, keepdims=True) if full else embedding.reshape(1, -1)
 
 
 
@@ -237,9 +239,11 @@ class DataMixin:
         return embedding
 
     def _select_from_pth(self, emb_dict: Dict[str, torch.Tensor], seq: str, cast_to_np: bool = False) -> torch.Tensor:
-        embedding = emb_dict[seq].reshape(1, -1)
-        if self._full:
-            embedding = embedding.reshape(len(seq), -1)
+        # Matrix caches store (l, d) with the special tokens kept, so l is not len(seq);
+        # only the pooled case has a shape worth asserting here.
+        embedding = emb_dict[seq]
+        if not self._full:
+            embedding = embedding.reshape(1, -1)
         if cast_to_np:
             embedding = _to_numpy(embedding)
         return embedding
@@ -1113,41 +1117,37 @@ class DataMixin:
             with sqlite3.connect(save_path) as conn:
                 c = conn.cursor()
                 for seq in train_seqs:
-                    embedding = _as_rows(self._select_from_sql(c, seq, cast_to_torch=False), seq, self._full)
+                    embedding = _as_row(self._select_from_sql(c, seq, cast_to_torch=False), self._full)
                     train_array.append(embedding)
 
                 for seq in valid_seqs:
-                    embedding = _as_rows(self._select_from_sql(c, seq, cast_to_torch=False), seq, self._full)
+                    embedding = _as_row(self._select_from_sql(c, seq, cast_to_torch=False), self._full)
                     valid_array.append(embedding)
 
                 for seq in test_seqs:
-                    embedding = _as_rows(self._select_from_sql(c, seq, cast_to_torch=False), seq, self._full)
+                    embedding = _as_row(self._select_from_sql(c, seq, cast_to_torch=False), self._full)
                     test_array.append(embedding)
         else:
             filename = get_embedding_filename(model_name, self._full, pooling_types, 'pth', hidden_state_index)
             save_path = os.path.join(save_dir, filename)
             emb_dict = torch.load(save_path)
             for seq in train_seqs:
-                embedding = _as_rows(self._select_from_pth(emb_dict, seq, cast_to_np=True), seq, self._full)
+                embedding = _as_row(self._select_from_pth(emb_dict, seq, cast_to_np=True), self._full)
                 train_array.append(embedding)
                 
             for seq in valid_seqs:
-                embedding = _as_rows(self._select_from_pth(emb_dict, seq, cast_to_np=True), seq, self._full)
+                embedding = _as_row(self._select_from_pth(emb_dict, seq, cast_to_np=True), self._full)
                 valid_array.append(embedding)
 
             for seq in test_seqs:
-                embedding = _as_rows(self._select_from_pth(emb_dict, seq, cast_to_np=True), seq, self._full)
+                embedding = _as_row(self._select_from_pth(emb_dict, seq, cast_to_np=True), self._full)
                 test_array.append(embedding)
             del emb_dict
 
-        train_array = np.concatenate(train_array, axis=0)
-        valid_array = np.concatenate(valid_array, axis=0)
-        test_array = np.concatenate(test_array, axis=0)
-        
-        if self._full: # average over the length of the sequence
-            train_array = np.mean(train_array, axis=1)
-            valid_array = np.mean(valid_array, axis=1)
-            test_array = np.mean(test_array, axis=1)
+        # _as_row already averaged any per-residue matrix, so every element is (1, d).
+        train_array = np.concatenate(train_array, axis=0)  # (n_train, d)
+        valid_array = np.concatenate(valid_array, axis=0)  # (n_valid, d)
+        test_array = np.concatenate(test_array, axis=0)  # (n_test, d)
 
         print_message('Numpy dataset shapes')
         print_message(f'Train: {train_array.shape}')
@@ -1181,18 +1181,18 @@ class DataMixin:
                 for seq_a, seq_b in zip(train_seqs_a, train_seqs_b):
                     if flip_train_pairs:
                         seq_a, seq_b = self._random_order(seq_a, seq_b)
-                    embedding_a = _as_rows(self._select_from_sql(c, seq_a, cast_to_torch=False), seq_a, self._full)
-                    embedding_b = _as_rows(self._select_from_sql(c, seq_b, cast_to_torch=False), seq_b, self._full)
+                    embedding_a = _as_row(self._select_from_sql(c, seq_a, cast_to_torch=False), self._full)
+                    embedding_b = _as_row(self._select_from_sql(c, seq_b, cast_to_torch=False), self._full)
                     train_array.append(np.concatenate([embedding_a, embedding_b], axis=-1))
 
                 for seq_a, seq_b in zip(valid_seqs_a, valid_seqs_b):
-                    embedding_a = _as_rows(self._select_from_sql(c, seq_a, cast_to_torch=False), seq_a, self._full)
-                    embedding_b = _as_rows(self._select_from_sql(c, seq_b, cast_to_torch=False), seq_b, self._full)
+                    embedding_a = _as_row(self._select_from_sql(c, seq_a, cast_to_torch=False), self._full)
+                    embedding_b = _as_row(self._select_from_sql(c, seq_b, cast_to_torch=False), self._full)
                     valid_array.append(np.concatenate([embedding_a, embedding_b], axis=-1))
 
                 for seq_a, seq_b in zip(test_seqs_a, test_seqs_b):
-                    embedding_a = _as_rows(self._select_from_sql(c, seq_a, cast_to_torch=False), seq_a, self._full)
-                    embedding_b = _as_rows(self._select_from_sql(c, seq_b, cast_to_torch=False), seq_b, self._full)
+                    embedding_a = _as_row(self._select_from_sql(c, seq_a, cast_to_torch=False), self._full)
+                    embedding_b = _as_row(self._select_from_sql(c, seq_b, cast_to_torch=False), self._full)
                     test_array.append(np.concatenate([embedding_a, embedding_b], axis=-1))
         else:
             filename = get_embedding_filename(model_name, self._full, pooling_types, 'pth', hidden_state_index)
@@ -1201,29 +1201,25 @@ class DataMixin:
             for seq_a, seq_b in zip(train_seqs_a, train_seqs_b):
                 if flip_train_pairs:
                     seq_a, seq_b = self._random_order(seq_a, seq_b)
-                embedding_a = _as_rows(self._select_from_pth(emb_dict, seq_a, cast_to_np=True), seq_a, self._full)
-                embedding_b = _as_rows(self._select_from_pth(emb_dict, seq_b, cast_to_np=True), seq_b, self._full)
+                embedding_a = _as_row(self._select_from_pth(emb_dict, seq_a, cast_to_np=True), self._full)
+                embedding_b = _as_row(self._select_from_pth(emb_dict, seq_b, cast_to_np=True), self._full)
                 train_array.append(np.concatenate([embedding_a, embedding_b], axis=-1))
 
             for seq_a, seq_b in zip(valid_seqs_a, valid_seqs_b):
-                embedding_a = _as_rows(self._select_from_pth(emb_dict, seq_a, cast_to_np=True), seq_a, self._full)
-                embedding_b = _as_rows(self._select_from_pth(emb_dict, seq_b, cast_to_np=True), seq_b, self._full)
+                embedding_a = _as_row(self._select_from_pth(emb_dict, seq_a, cast_to_np=True), self._full)
+                embedding_b = _as_row(self._select_from_pth(emb_dict, seq_b, cast_to_np=True), self._full)
                 valid_array.append(np.concatenate([embedding_a, embedding_b], axis=-1))
 
             for seq_a, seq_b in zip(test_seqs_a, test_seqs_b):
-                embedding_a = _as_rows(self._select_from_pth(emb_dict, seq_a, cast_to_np=True), seq_a, self._full)
-                embedding_b = _as_rows(self._select_from_pth(emb_dict, seq_b, cast_to_np=True), seq_b, self._full)
+                embedding_a = _as_row(self._select_from_pth(emb_dict, seq_a, cast_to_np=True), self._full)
+                embedding_b = _as_row(self._select_from_pth(emb_dict, seq_b, cast_to_np=True), self._full)
                 test_array.append(np.concatenate([embedding_a, embedding_b], axis=-1))
             del emb_dict
 
-        train_array = np.concatenate(train_array, axis=0)
-        valid_array = np.concatenate(valid_array, axis=0)
-        test_array = np.concatenate(test_array, axis=0)
-        
-        if self._full: # average over the length of the sequence
-            train_array = np.mean(train_array, axis=1)
-            valid_array = np.mean(valid_array, axis=1)
-            test_array = np.mean(test_array, axis=1)
+        # Each row is protein A concatenated with protein B, both already one vector each.
+        train_array = np.concatenate(train_array, axis=0)  # (n_train, 2 * d)
+        valid_array = np.concatenate(valid_array, axis=0)  # (n_valid, 2 * d)
+        test_array = np.concatenate(test_array, axis=0)  # (n_test, 2 * d)
 
         print_message('Numpy dataset shapes')
         print_message(f'Train: {train_array.shape}')

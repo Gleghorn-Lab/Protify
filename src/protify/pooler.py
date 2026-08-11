@@ -190,8 +190,11 @@ class Pooler:
         **kwargs: object,
     ) -> torch.Tensor:
         # emb: (b, l, d); attention_mask: (b, l)
+        # Population variance in both branches, matching std_pooling. The masked path
+        # divides by the residue count, so an unbiased estimate here would disagree with
+        # it, and with std ** 2, for the same sequence.
         if attention_mask is None:
-            return emb.var(dim=1)  # (b, d)
+            return emb.var(dim=1, unbiased=False)  # (b, d)
 
         attention_mask = attention_mask.unsqueeze(-1)  # (b, l, 1)
         mean = (emb * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)  # (b, d)
