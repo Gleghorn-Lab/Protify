@@ -59,7 +59,7 @@ def parse_arguments():
     # ----------------- DataArguments ----------------- #
     parser.add_argument("--delimiter", default=",", help="Delimiter for data.")
     parser.add_argument("--col_names", nargs="+", default=["seqs", "labels"], help="Column names.") # DEPRECATED, found automatically now
-    parser.add_argument("--max_length", type=int, default=2048, help="Maximum sequence length.")
+    parser.add_argument("--max_length", type=int, default=2048, help="Maximum tokenizer length, including special tokens.")
     parser.add_argument(
         "--padding",
         choices=["max_length", "longest"],
@@ -67,7 +67,7 @@ def parse_arguments():
         help="Padding strategy. 'max_length' pads all sequences to --max_length (recommended for torch.compile + flex attention). 'longest' pads to the longest sequence in each batch.",
     )
     parser.add_argument("--trim", action="store_true",
-                        help="Truncate sequences longer than --max_length instead of dropping them from the dataset.")
+                        help="Drop sequences longer than the model-specific --max_length budget instead of truncating them.")
     parser.add_argument("--data_names", nargs="+", default=[], help="List of HF dataset names.")
     parser.add_argument("--data_dirs", nargs="+", default=[], help="List of local data directories.")
     parser.add_argument("--aa_to_dna", action="store_true", help="Translate amino-acid sequences to DNA codon sequences using common human synonymous codons.")
@@ -80,8 +80,8 @@ def parse_arguments():
 
     # ----------------- BaseModelArguments ----------------- #
     parser.add_argument("--model_names", nargs="+", default=None, help="List of preset model names to use (e.g. ESM2-8). Mutually exclusive with --model_paths/--model_types.")
-    parser.add_argument("--model_paths", nargs="+", default=None, help="List of model paths (HuggingFace or local). Must be paired with --model_types. Mutually exclusive with --model_names.")
-    parser.add_argument("--model_types", nargs="+", default=None, help="List of model type keywords paired with --model_paths (e.g. esm2, esmc, protbert, prott5, ankh, glm, dplm, dplm2, protclm, onehot, amplify, e1, calm, custom, random).")
+    parser.add_argument("--model_paths", nargs="+", default=None, help="List of model paths (HuggingFace or local). Must be paired with --model_types. Remote CARBON paths must use org/repo@<commit SHA>. Mutually exclusive with --model_names.")
+    parser.add_argument("--model_types", nargs="+", default=None, help="List of model type keywords paired with --model_paths (e.g. esm2, esmc, protbert, prott5, ankh, glm, dplm, dplm2, protclm, onehot, amplify, e1, calm, carbon, custom, random).")
     parser.add_argument("--model_dtype", type=str, choices=["fp32", "fp16", "bf16", "float32", "float16", "bfloat16"], default="bf16", help="Data type for loading base models.")
     parser.add_argument("--use_xformers", action="store_true", help="Use xformers memory-efficient attention for AMPLIFY models.")
     parser.add_argument("--sae_layer", type=int, default=None, help="ESMC hidden-state layer the sparse autoencoder reads. Defaults to the 75%% depth layer each backbone publishes (23, 27, and 60). Only layers other than that one are restricted to --sae_k 64 with --sae_codebook_dim 16384.")
@@ -537,12 +537,17 @@ if __name__ == "__main__":
 import torch
 from torchinfo import summary
 
-from protify.base_models.get_base_models import BaseModelArguments, get_base_model_for_training, get_tokenizer
+from protify.base_models.get_base_models import (
+    BaseModelArguments,
+    get_base_model_for_training,
+    get_tokenizer,
+    resolve_data_max_length,
+)
 from protify.base_models.utils import wrap_lora
 from protify.benchmarks.proteingym.compare_scoring_methods import compare_scoring_methods
 from protify.benchmarks.proteingym.scorer import ProteinGymRunner
 from protify.data.data_mixin import DataArguments, DataMixin
-from protify.embedder import Embedder, EmbeddingArguments, get_embedding_filename
+from protify.embedder import Embedder, EmbeddingArguments
 from protify.hyperopt_utils import HyperoptModule
 from protify.logger import MetricsLogger, log_method_calls
 from protify.probes.estimator_probe import EstimatorProbeArguments, train_estimator_probe
@@ -643,6 +648,11 @@ class MainProcess(MetricsLogger, DataMixin, TrainerMixin):
         self._full = self.full_args.matrix_embed
         self._max_length = self.full_args.max_length
         self._trim = self.full_args.trim
+        self._data_max_length = resolve_data_max_length(
+            [dispatch_type for _, dispatch_type, _ in self.model_args.model_entries()],
+            self._max_length,
+            self._trim,
+        )
         self._delimiter = self.full_args.delimiter
         self._col_names = self.full_args.col_names
         self._aa_to_dna = self.full_args.aa_to_dna
@@ -676,7 +686,7 @@ class MainProcess(MetricsLogger, DataMixin, TrainerMixin):
                 model_path=model_path,
             )
             if self.probe_args.lora:
-                model = wrap_lora(model, self.probe_args.lora_r, self.probe_args.lora_alpha, self.probe_args.lora_dropout)
+                model = wrap_lora(model, self.probe_args.lora_r, self.probe_args.lora_alpha, self.probe_args.lora_dropout, model_name)
             return model
         return factory
     
@@ -735,16 +745,14 @@ class MainProcess(MetricsLogger, DataMixin, TrainerMixin):
         
         # Get tokenizer and determine input dimensions
         tokenizer = get_tokenizer(model_name)
-        pooling_types = self.embedding_args.pooling_types
-        hidden_state_index = self.embedding_args.hidden_state_index
         
         if self._sql:
-            filename = get_embedding_filename(model_name, self._full, pooling_types, 'db', hidden_state_index)
+            filename = self._embedding_cache_filename(model_name, 'db')
             save_path = os.path.join(self.embedding_args.embedding_save_dir, filename)
             input_dim = self.get_embedding_dim_sql(save_path, subtrain_seqs[0], tokenizer)
             emb_for_training = None
         else:
-            filename = get_embedding_filename(model_name, self._full, pooling_types, 'pth', hidden_state_index)
+            filename = self._embedding_cache_filename(model_name, 'pth')
             save_path = os.path.join(self.embedding_args.embedding_save_dir, filename)
             emb_for_training = torch_load(save_path) if os.path.exists(save_path) else emb_dict
             input_dim = self.get_embedding_dim_pth(emb_for_training, subtrain_seqs[0], tokenizer)
@@ -803,7 +811,7 @@ class MainProcess(MetricsLogger, DataMixin, TrainerMixin):
             model_path=model_path,
         )
         if self.probe_args.lora:
-            model = wrap_lora(model, self.probe_args.lora_r, self.probe_args.lora_alpha, self.probe_args.lora_dropout)
+            model = wrap_lora(model, self.probe_args.lora_r, self.probe_args.lora_alpha, self.probe_args.lora_dropout, model_name)
         summary(model)
         model, valid_metrics, test_metrics, _, _ = self.trainer_base_model(
             model=model,
@@ -877,7 +885,7 @@ class MainProcess(MetricsLogger, DataMixin, TrainerMixin):
             model_path=model_path,
         )
         if self.probe_args.lora:
-            model = wrap_lora(model, self.probe_args.lora_r, self.probe_args.lora_alpha, self.probe_args.lora_dropout)
+            model = wrap_lora(model, self.probe_args.lora_r, self.probe_args.lora_alpha, self.probe_args.lora_dropout, model_name)
         probe = get_probe(self.probe_args)
         summary(model)
         summary(probe)
@@ -935,17 +943,15 @@ class MainProcess(MetricsLogger, DataMixin, TrainerMixin):
             tokenizer = get_tokenizer(dispatch_type, model_path=model_path)
 
             # get embedding size
-            pooling_types = self.embedding_args.pooling_types
-            hidden_state_index = self.embedding_args.hidden_state_index
             if self._sql:
                 # for sql, the embeddings will be gathered in real time during training
-                filename = get_embedding_filename(display_name, self._full, pooling_types, 'db', hidden_state_index)
+                filename = self._embedding_cache_filename(display_name, 'db')
                 save_path = os.path.join(self.embedding_args.embedding_save_dir, filename)
                 input_size = self.get_embedding_dim_sql(save_path, test_seq, tokenizer)
                 emb_dict = None
             else:
                 # for pth, the embeddings are loaded entirely into RAM and accessed during training
-                filename = get_embedding_filename(display_name, self._full, pooling_types, 'pth', hidden_state_index)
+                filename = self._embedding_cache_filename(display_name, 'pth')
                 save_path = os.path.join(self.embedding_args.embedding_save_dir, filename)
                 emb_dict = torch_load(save_path)
                 input_size = self.get_embedding_dim_pth(emb_dict, test_seq, tokenizer)
@@ -1002,17 +1008,15 @@ class MainProcess(MetricsLogger, DataMixin, TrainerMixin):
             tokenizer = get_tokenizer(dispatch_type, model_path=model_path)
 
             # get embedding size
-            pooling_types = self.embedding_args.pooling_types
-            hidden_state_index = self.embedding_args.hidden_state_index
             if self._sql:
                 # for sql, the embeddings will be gathered in real time during training
-                filename = get_embedding_filename(display_name, self._full, pooling_types, 'db', hidden_state_index)
+                filename = self._embedding_cache_filename(display_name, 'db')
                 save_path = os.path.join(self.embedding_args.embedding_save_dir, filename)
                 input_size = self.get_embedding_dim_sql(save_path, test_seq, tokenizer)
                 emb_dict = None
             else:
                 # for pth, the embeddings are loaded entirely into RAM and accessed during training
-                filename = get_embedding_filename(display_name, self._full, pooling_types, 'pth', hidden_state_index)
+                filename = self._embedding_cache_filename(display_name, 'pth')
                 save_path = os.path.join(self.embedding_args.embedding_save_dir, filename)
                 emb_dict = torch_load(save_path)
                 input_size = self.get_embedding_dim_pth(emb_dict, test_seq, tokenizer)

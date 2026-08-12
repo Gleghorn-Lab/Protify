@@ -6,7 +6,7 @@ This page documents how Protify loads and prepares data: `DataArguments`, suppor
 
 ## Overview
 
-Data is specified either by **dataset names** (HuggingFace IDs or special presets like `standard_benchmark`) or by **local directories** containing split files. After loading, columns are normalized (e.g. to `seqs`/`labels` or `SeqA`/`SeqB`/`labels` for PPI), sequences are trimmed or truncated by `max_length`, and optional sequence translation is applied. The result is a dictionary of datasets keyed by name, each value being `(train_set, valid_set, test_set, num_labels, label_type, ppi)`.
+Data is specified either by **dataset names** (HuggingFace IDs or special presets like `standard_benchmark`) or by **local directories** containing split files. After loading, columns are normalized (e.g. to `seqs`/`labels` or `SeqA`/`SeqB`/`labels` for PPI), optional sequence translation is applied, and the translated output is trimmed or truncated by the target model's raw-sequence budget. Valid lowercase biological sequences are preserved and normalized to uppercase. The result is a dictionary of datasets keyed by name, each value being `(train_set, valid_set, test_set, num_labels, label_type, ppi)`.
 
 ---
 
@@ -15,7 +15,7 @@ Data is specified either by **dataset names** (HuggingFace IDs or special preset
 1. **DataArguments** is built from config (`data_names`, `data_dirs`, `delimiter`, `max_length`, etc.). From `data_names`, the code resolves `data_paths` (HuggingFace dataset IDs) and sets `protein_gym` when the name is `protein_gym`.
 2. **DataMixin.get_data()** loads each path: for HuggingFace it uses `load_dataset(path)`; for `data_dirs` it globs split files and reads tabular files with pandas or labeled FASTA directly into HuggingFace `Dataset`.
 3. **Splits:** Train is required; at least one of valid or test is required. Valid aliases are `valid`, `validation`, `val`, and `dev`; test aliases are `test` and `testing`. If valid is missing, 10% of train is used; if test is missing, 10% of train is used.
-4. **process_datasets()** normalizes column names, drops missing sequence/label, removes zero-length sequences, applies trim or truncation, optionally runs one of the translation options, and infers `label_type` (e.g. singlelabel, multilabel, regression, tokenwise).
+4. **process_datasets()** normalizes column names, drops missing sequence/label, optionally translates sequences, removes zero-length translated outputs, applies trim or truncation to the tokenizer-facing sequence, and infers `label_type` (e.g. singlelabel, multilabel, regression, tokenwise).
 5. For **embedding-based training**, datasets are later built from precomputed embeddings (SQLite or `.pth`) via `build_vector_numpy_dataset_from_embeddings` or the PPI/multi-column variants.
 
 ---

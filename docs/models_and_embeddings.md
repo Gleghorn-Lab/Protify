@@ -15,7 +15,7 @@ Protify supports two ways to specify models: **preset names** (`model_names`, e.
 1. **BaseModelArguments** is built from config. Either `model_names` is set (preset mode) or `model_paths` and `model_types` are set (path mode). They are mutually exclusive.
 2. **model_entries()** yields `(display_name, dispatch_type, model_path)` for each model. Preset mode: `dispatch_type` is the preset name, `model_path` is None. Path mode: `dispatch_type` is the type keyword (e.g. esm2, custom), `model_path` is the path.
 3. **Embedder** is called per model. For each model it may: download precomputed embeddings (if `download_embeddings`), read existing embeddings from disk (SQL or PTH), or compute new embeddings via `get_base_model()` and forward passes, then optionally save them.
-4. **get_embedding_filename()** defines the filename (and thus cache key) from model name, `matrix_embed`, pooling types, and non-default hidden-state index.
+4. **get_embedding_filename()** defines the cache key from model name, `matrix_embed`, pooling, hidden-state index, and tokenizer `max_length`. CARBON keys also include the resolved model commit and preprocessing schema.
 
 ---
 
@@ -26,8 +26,8 @@ Defined in [get_base_models.py](../src/protify/base_models/get_base_models.py).
 | Argument | Type | Description |
 |----------|------|-------------|
 | `model_names` | List[str] | Preset names (e.g. ESM2-8, ProtT5). Use `['standard']` to expand to standard set, or names containing `'exp'` for experimental. Mutually exclusive with model_paths/model_types. |
-| `model_paths` | List[str] | Paths (HuggingFace IDs or local). Must pair with `model_types` (same length). |
-| `model_types` | List[str] | Type keyword per path: esm2, esmc, protbert, prott5, ankh, glm, dplm, dplm2, protclm, onehot, amplify, e1, calm, custom, random, etc. |
+| `model_paths` | List[str] | Paths (HuggingFace IDs or local). Must pair with `model_types` (same length). Remote CARBON IDs must be pinned as `org/repo@<full-commit-sha>`. |
+| `model_types` | List[str] | Type keyword per path: esm2, esmc, carbon, protbert, prott5, ankh, glm, dplm, dplm2, protclm, onehot, amplify, e1, calm, custom, random, etc. |
 | `model_dtype` | str | Data type for loading (e.g. bf16, fp32). |
 
 **model_entries()** yields `(display_name, dispatch_type, model_path)` so that the pipeline can call `get_base_model(dispatch_type, ..., model_path=model_path)` and `get_tokenizer(dispatch_type, model_path=model_path)`.
@@ -45,7 +45,7 @@ Defined in [get_base_models.py](../src/protify/base_models/get_base_models.py).
 - **get_tokenizer(model_name, model_path=None)**  
   Returns the tokenizer for the given model name (and path for custom/path-based loading).
 
-Supported model type keywords (for `model_types` or in preset names) include: random, esm2, dsm, esmc, protbert, prott5, ankh, glm, dplm, dplm2, protclm, onehot, amplify, e1, calm, custom. See [supported_models.py](../src/protify/base_models/supported_models.py) for `all_presets_with_paths`, `currently_supported_models`, `standard_models`, `experimental_models`.
+Supported model type keywords (for `model_types` or in preset names) include: random, esm2, dsm, esmc, carbon, protbert, prott5, ankh, glm, dplm, dplm2, protclm, onehot, amplify, e1, calm, custom. See [supported_models.py](../src/protify/base_models/supported_models.py) for `all_presets_with_paths`, `currently_supported_models`, `standard_models`, `experimental_models`.
 
 ---
 
@@ -61,14 +61,14 @@ Defined in [embedder.py](../src/protify/embedder.py). Constructor maps long name
 | `download_dir` | str | Synthyra/vector_embeddings | HuggingFace dataset/repo for precomputed embeddings. |
 | `matrix_embed` | bool | False | If True, keep per-residue matrices; if False, pool to vectors. |
 | `embedding_pooling_types` | List[str] | ['mean'] | Pooling for vectors (e.g. mean, var, parti). |
-| `embedding_hidden_state_index` | int | -1 | Hidden-state tuple index to pool from. `-1` preserves the final hidden-state behavior and old cache names. |
+| `embedding_hidden_state_index` | int | -1 | Hidden-state tuple index to pool from. `-1` uses `last_hidden_state` without requesting all intermediate states. |
 | `save_embeddings` | bool | False | Whether to write computed embeddings to disk. |
 | `embed_dtype` | dtype | torch.float32 | Dtype for stored embeddings. |
 | `model_dtype` | dtype | None | Dtype for base model (None uses default). |
 | `sql` | bool | False | Store in SQLite (`.db`) instead of `.pth`. |
 | `embedding_save_dir` | str | embeddings | Directory for save/load paths. |
 | `padding` | str | max_length | Padding strategy for the embedding collator. `max_length` pads all batches to `max_length` tokens (optimal for torch.compile + flex attention). `longest` pads to the longest sequence in each batch (skips compile, but avoids wasted padding compute). |
-| `max_length` | int | 2048 | Maximum sequence length. Always passed to the tokenizer for truncation, regardless of padding mode. |
+| `max_length` | int | 2048 | Maximum tokenizer length, including special and model boundary tokens. Always passed to the tokenizer for truncation. CARBON uses two boundary tokens and one token per DNA 6-mer, so its raw DNA budget is `6 * (max_length - 2)` base pairs. |
 | `multi_gpu` | bool | False | Split sequences across all available GPUs via `mp.Process`. Each GPU loads its own model copy and embeds a shard. |
 | `autocast` | bool | False | Wrap forward pass in `torch.autocast` for mixed-precision inference. Useful when `model_dtype` is float32 but you want float16 compute speed (~1.5x). |
 
@@ -92,12 +92,14 @@ Defined in [embedder.py](../src/protify/embedder.py). Constructor maps long name
 ## get_embedding_filename
 
 ```text
-get_embedding_filename(model_name, matrix_embed, pooling_types, extension='pth', hidden_state_index=-1)
+get_embedding_filename(model_name, matrix_embed, pooling_types, extension='pth', hidden_state_index=-1, max_length=2048, model_type=None, model_path=None)
 ```
 
-Returns a filename: `{model_name}_{matrix_embed}[_hs{hidden_state_index}][_{pooling_types}].{extension}`. For vector embeddings, pooling types are sorted and joined with underscore (e.g. `mean_var`). Extension is `pth` or `db` for SQL.
+Returns a filename containing `{model_name}`, matrix mode, optional hidden-state index, `max_length`, and pooling types. CARBON filenames additionally contain the full immutable model revision and preprocessing schema. For vector embeddings, pooling types are sorted and joined with underscore (e.g. `mean_var`). Extension is `pth` or `db` for SQL.
 
-The default `hidden_state_index=-1` omits the hidden-state suffix, so existing caches keep their old names. Non-default indexes use distinct caches, e.g. `ESM2-8_False_hs6_mean_var.pth`.
+The default `hidden_state_index=-1` omits the hidden-state suffix. Cache names intentionally changed when `max_length` became part of the identity, preventing embeddings produced under different truncation limits from being mixed. Locally cached embeddings written before that change are not reused, so they are recomputed once.
+
+`--download_embeddings` still finds the published files. They were uploaded under the older naming and all produced at the default `max_length`, so `_download_embeddings` requests the current name first and then falls back to `legacy_embedding_filename`, and only when this run uses that same default. Below it, the published file would carry more of each sequence than the run asked for, so the fallback is skipped and the embeddings are computed locally.
 
 ---
 
@@ -177,6 +179,7 @@ Common values for `embedding_pooling_types` (and probe-side `probe_pooling_types
 - **var:** Variance (or other stats) over sequence.
 - **parti:** Requires attention outputs; see pooler implementation.
 - **cls:** Use first token (CLS) representation when available.
+- **eos:** Use the model-specific closing boundary token. Protify validates that each active sequence contains exactly one such token, so this works with left, right, or non-contiguous padding masks.
 
 Pooling is applied in [pooler.py](../src/protify/pooler.py) via the `Pooler` class when not using `matrix_embed`.
 
@@ -199,6 +202,14 @@ py -m src.protify.main --model_names ESM2-8 ESM2-35 --data_names DeepLoc-2
 ```bash
 py -m src.protify.main --model_paths "org/my-model" --model_types custom --data_names DeepLoc-2
 ```
+
+Protify implements and audits CARBON's raw-DNA 6-mer path locally. It loads the stock Qwen base vocabulary from a pinned commit and does not execute CARBON or Qwen repository code. Remote CARBON model weights must still use a full immutable commit revision:
+
+```bash
+py -m src.protify.main --model_paths "org/carbon-model@0123456789abcdef0123456789abcdef01234567" --model_types carbon --data_names my-dna-dataset
+```
+
+CARBON uppercases DNA, preserves a final 1-5 bp remainder, and follows the published tokenizer by right-padding that final 6-mer token with `A`. With `padding=max_length`, Protify explicitly produces exact `max_length` tensors for stable compilation.
 
 ### Save and reuse embeddings
 

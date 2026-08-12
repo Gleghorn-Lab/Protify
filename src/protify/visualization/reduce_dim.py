@@ -47,6 +47,7 @@ class VisualizationArguments:
     download_dir: str = "Synthyra/vector_embeddings"
     embedding_pooling_types: List[str] = field(default_factory=lambda: ["mean"])
     embedding_hidden_state_index: int = -1
+    max_length: int = 2048
     save_embeddings: bool = False
     embed_dtype: str = "float32"  # Will be converted to torch dtype
     
@@ -90,6 +91,7 @@ class DimensionalityReducer(DataMixin):
             pooling_types,
             'pth',
             hidden_state_index,
+            max_length=self.args.max_length,
         )
         filename_db = get_embedding_filename(
             self.args.model_name,
@@ -97,6 +99,7 @@ class DimensionalityReducer(DataMixin):
             pooling_types,
             'db',
             hidden_state_index,
+            max_length=self.args.max_length,
         )
         save_path = os.path.join(self.args.embedding_save_dir, filename_pth)
         db_path = os.path.join(self.args.embedding_save_dir, filename_db)
@@ -146,6 +149,7 @@ class DimensionalityReducer(DataMixin):
                 sql=self.args.sql,
                 embedding_save_dir=self.args.embedding_save_dir,
                 embedding_hidden_state_index=self.args.embedding_hidden_state_index,
+                max_length=self.args.max_length,
             )
             # Initialize embedder with all sequences (it will only embed missing ones)
             embedder = Embedder(embedding_args, sequences)
@@ -172,6 +176,7 @@ class DimensionalityReducer(DataMixin):
                 pooling_types,
                 'db',
                 hidden_state_index,
+                max_length=self.args.max_length,
             )
             save_path = os.path.join(self.args.embedding_save_dir, filename)
             with sqlite3.connect(save_path) as conn:
@@ -195,6 +200,7 @@ class DimensionalityReducer(DataMixin):
                 pooling_types,
                 'pth',
                 hidden_state_index,
+                max_length=self.args.max_length,
             )
             save_path = os.path.join(self.args.embedding_save_dir, filename)
             emb_dict = torch_load(save_path)

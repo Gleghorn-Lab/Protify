@@ -23,7 +23,7 @@ The GUI is the same **MainProcess** as the CLI, run with `GUI=True` and an initi
 | Tab | Purpose |
 |-----|---------|
 | **Info** | API keys (HF, W&B, Modal, Synthyra), paths, W&B sweep options, data transform flags. "Start session" creates dirs, sets log_dir/results_dir, starts the session log. |
-| **Model** | Select models (preset names or paths + types). "Apply" sets full_args.model_names (or model_paths/model_types) and builds BaseModelArguments. |
+| **Model** | Select models, including all three CARBON presets, or configure paths + types. "Apply" sets full_args.model_names (or model_paths/model_types) and builds BaseModelArguments. |
 | **Data** | Dataset names or local dirs, max_length, trim, delimiter, col_names, translation flags, multi_column. "Get data" sets data_args and calls get_datasets(). |
 | **Embedding** | Batch size, workers, download_embeddings, matrix_embed, pooling types, save_embeddings, sql. "Get embeddings" sets embedding_args and calls save_embeddings_to_disk(). |
 | **Probe** | Probe type, tokenwise, sizes, dropout, pre_ln, rotary, attention_backend, probe_pooling_types, Save Model, Push Raw Probe, LoRA, sim_type. "Configure probe" updates full_args and builds ProbeArguments. |

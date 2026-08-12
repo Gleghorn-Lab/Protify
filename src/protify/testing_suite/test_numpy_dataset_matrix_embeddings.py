@@ -5,8 +5,6 @@ the way in. The stored matrix keeps the leading and trailing special tokens, so 
 len(seq)+2 rows and cannot be reshaped against the sequence length.
 """
 
-import types
-
 import numpy as np
 import pytest
 import torch
@@ -38,20 +36,23 @@ def _residue_matrix(seq: str, offset: float) -> torch.Tensor:
 @pytest.fixture
 def matrix_mixin(tmp_path):
     """A DataMixin whose only embedding source is a two-protein matrix .pth cache."""
-    from protify.embedder import get_embedding_filename
+    from protify.embedder import EmbeddingArguments
 
     embeddings = {SEQ_A: _residue_matrix(SEQ_A, 0.0), SEQ_B: _residue_matrix(SEQ_B, 100.0)}
-    filename = get_embedding_filename('test-model', True, POOLING_TYPES, 'pth', HIDDEN_STATE_INDEX)
-    torch.save(embeddings, tmp_path / filename)
+    # The real config object names the file, so the fixture cannot drift from the cache
+    # identity the reader builds.
+    embedding_args = EmbeddingArguments(
+        embedding_save_dir=str(tmp_path),
+        embedding_pooling_types=POOLING_TYPES,
+        embedding_hidden_state_index=HIDDEN_STATE_INDEX,
+        matrix_embed=True,
+    )
+    torch.save(embeddings, tmp_path / embedding_args.cache_filename('test-model'))
 
     mixin = DataMixin()
     mixin._sql = False
     mixin._full = True
-    mixin.embedding_args = types.SimpleNamespace(
-        embedding_save_dir=str(tmp_path),
-        pooling_types=POOLING_TYPES,
-        hidden_state_index=HIDDEN_STATE_INDEX,
-    )
+    mixin.embedding_args = embedding_args
     return mixin
 
 
